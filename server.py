@@ -202,7 +202,7 @@ def _get_metadata_via_ytdlp(video_id: str) -> dict:
 
     try:
         result = subprocess.run(
-            ["yt-dlp", "--dump-json", "--no-download", "--no-warnings", url],
+            ["yt-dlp", "--dump-json", "--skip-download", "--no-warnings", url],
             capture_output=True,
             text=True,
             timeout=15,
@@ -376,7 +376,12 @@ class GetTranscriptInput(BaseModel):
         "openWorldHint": True,
     },
 )
-async def youtube_get_transcript(params: GetTranscriptInput) -> str:
+async def youtube_get_transcript(
+    url: str,
+    languages: Optional[list[str]] = None,
+    include_timestamps: bool = False,
+    include_metadata: bool = True,
+) -> str:
     """Fetch the transcript (subtitles) of a YouTube video.
 
     Returns the video's transcript as Markdown with YAML frontmatter containing
@@ -387,17 +392,20 @@ async def youtube_get_transcript(params: GetTranscriptInput) -> str:
     translating content, creating notes from lectures/talks.
 
     Args:
-        params (GetTranscriptInput): Contains:
-            - url (str): YouTube URL or video ID
-            - languages (list[str]): Preferred languages, defaults to ["ja", "en"]
-            - include_timestamps (bool): Add [MM:SS] timestamps per line
-            - include_metadata (bool): Include title/author/description
+        url: YouTube video URL or video ID. Accepts youtube.com/watch?v=...,
+            youtu.be/..., youtube.com/shorts/..., or a bare 11-char video ID.
+        languages: Preferred languages in priority order. Defaults to ["ja", "en", "ko"].
+            Supported: ja, en, ko, zh, de, fr, es, pt, ru (and others on the video).
+        include_timestamps: Include [MM:SS] timestamps for each line of the transcript.
+        include_metadata: Include video metadata (title, author, etc.) in the output.
 
     Returns:
         str: Markdown-formatted transcript with YAML frontmatter
     """
-    video_id = _extract_video_id(params.url)
-    languages = params.languages or DEFAULT_LANGUAGES
+    # Strip angle brackets some people paste around URLs
+    url = url.strip().strip("<>")
+    video_id = _extract_video_id(url)
+    langs = languages or DEFAULT_LANGUAGES
 
     # --- Fetch transcript ---
     transcript_info = None
@@ -405,14 +413,14 @@ async def youtube_get_transcript(params: GetTranscriptInput) -> str:
 
     # Strategy 1: youtube-transcript-api (preferred, lightweight)
     try:
-        transcript_info = _get_transcript_via_api(video_id, languages)
+        transcript_info = _get_transcript_via_api(video_id, langs)
     except Exception as e:
         errors.append(f"youtube-transcript-api: {e}")
 
     # Strategy 2: yt-dlp fallback
     if transcript_info is None:
         try:
-            transcript_info = _get_transcript_via_ytdlp(video_id, languages)
+            transcript_info = _get_transcript_via_ytdlp(video_id, langs)
         except Exception as e:
             errors.append(f"yt-dlp: {e}")
 
@@ -427,12 +435,12 @@ async def youtube_get_transcript(params: GetTranscriptInput) -> str:
         )
 
     transcript_text = _format_transcript_text(
-        transcript_info["entries"], params.include_timestamps
+        transcript_info["entries"], include_timestamps
     )
 
     # --- Fetch metadata ---
     metadata = {"title": "Unknown", "author": "Unknown", "video_id": video_id}
-    if params.include_metadata:
+    if include_metadata:
         try:
             metadata = _get_metadata_via_ytdlp(video_id)
         except Exception:
