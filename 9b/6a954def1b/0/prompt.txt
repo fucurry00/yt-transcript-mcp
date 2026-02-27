@@ -1,0 +1,76 @@
+Implement the following plan:
+
+# youtube-transcript-api v1.x API 互換性修正プラン
+
+## Context
+
+MCP サーバーへの接続は成功したが、`youtube-transcript-api` v1.x の API 変更により
+`list_transcripts` クラスメソッドが廃止されトランスクリプト取得が失敗している。
+
+## 根本原因
+
+`youtube-transcript-api` のバージョン: **v1.2.4** がインストール済み。
+
+v0.x → v1.x で API が大きく変更された：
+
+| | v0.x（旧） | v1.x（新） |
+|---|---|---|
+| 呼び出し方 | クラスメソッド | **インスタンスメソッド** |
+| メソッド名 | `list_transcripts()` | `list()` |
+
+- 旧: `YouTubeTranscriptApi.list_transcripts(video_id)` （クラスメソッド）
+- 新: `YouTubeTranscriptApi().list(video_id)` （インスタンスメソッド）
+
+`TranscriptList` の `find_manually_created_transcript`、`find_generated_transcript` は変更なし。
+
+## 修正内容
+
+**対象ファイル**: `server.py`（`_get_transcript_via_api` 関数、64行目）
+
+```python
+# 修正前
+transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+# 修正後
+transcript_list = YouTubeTranscriptApi().list(video_id)
+```
+
+変更は **1行のみ**。他の処理（`find_manually_created_transcript`、`fetch()` 等）は変更不要。
+
+## 検証方法
+
+1. 修正後、Claude Desktop 上で確認:
+   ```
+   この動画の文字起こしを取得して: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+   ```
+2. またはローカルで直接テスト:
+   ```
+   uv run python -c "
+   from youtube_transcript_api import YouTubeTranscriptApi
+   tl = YouTubeTranscriptApi().list('dQw4w9WgXcQ')
+   print(list(tl))
+   "
+   ```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/kentaro/.claude/projects/-Users-kentaro-area-of-responsibility-extend-claude-yt-transcript-yt-transcript-mcp/bee44d78-8b97-44a5-9ddc-455f1aac291e.jsonl
+
+---
+
+git に記録
+
+---
+
+main にマージして
+
+---
+
+これまでローカルmcpサーバーを作成した。これをリモートにまで拡張したい。
+
+---
+
+chatgptアプリやClaudeアプリから接続したい。どの方法が適切か判断したい
+
+---
+
+[Request interrupted by user for tool use]
