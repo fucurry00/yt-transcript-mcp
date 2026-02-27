@@ -3,8 +3,9 @@
   "checkpoint_id": "9b6a954def1b",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
+    "pyproject.toml",
     "server.py"
   ],
   "sessions": [
@@ -14,13 +15,20 @@
       "context": "/9b/6a954def1b/0/context.md",
       "content_hash": "/9b/6a954def1b/0/content_hash.txt",
       "prompt": "/9b/6a954def1b/0/prompt.txt"
+    },
+    {
+      "metadata": "/9b/6a954def1b/1/metadata.json",
+      "transcript": "/9b/6a954def1b/1/full.jsonl",
+      "context": "/9b/6a954def1b/1/context.md",
+      "content_hash": "/9b/6a954def1b/1/content_hash.txt",
+      "prompt": "/9b/6a954def1b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 34,
-    "cache_creation_tokens": 35743,
-    "cache_read_tokens": 959439,
-    "output_tokens": 13662,
-    "api_call_count": 24
+    "input_tokens": 50,
+    "cache_creation_tokens": 117372,
+    "cache_read_tokens": 1232032,
+    "output_tokens": 16839,
+    "api_call_count": 35
   }
 }

@@ -1,0 +1,164 @@
+Implement the following plan:
+
+# Plan: HTTP/SSE モードでの起動対応
+
+## Context
+`server.py` の entry point では `MCP_TRANSPORT=streamable-http` のみ実装済みで、
+SSE transport が未対応。さらに `else: mcp.run()` が transport を渡していないため、
+`MCP_TRANSPORT=sse` を設定しても stdio になるバグがある。
+
+FastMCP の `run()` は `transport="sse"` を受け付け、内部で uvicorn + `sse_app()` を起動する
+（`run_sse_async()` → `mcp.sse_app()` → uvicorn）。ホスト・ポートは FastMCP の
+Settings 経由（デフォルト `127.0.0.1:8000`、env var `FASTMCP_HOST`/`FASTMCP_PORT` で変更可）。
+
+## 変更ファイル
+- `server.py` (entry point 部分のみ)
+- `pyproject.toml` (uvicorn を依存関係に追加)
+
+## 変更内容
+
+### server.py: entry point (line 459–490)
+
+`elif transport == "sse":` ブランチを追加し、`else` で `mcp.run()` に transport を渡す:
+
+```python
+if __name__ == "__main__":
+    import os
+
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        import uvicorn
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+
+        app = mcp.streamable_http_app()
+
+        api_key = os.environ.get("API_KEY")
+        if api_key:
+            class _BearerAuthMiddleware(BaseHTTPMiddleware):
+                async def dispatch(self, request: Request, call_next):
+                    auth = request.headers.get("Authorization", "")
+                    if not auth.startswith("Bearer ") or auth[7:] != api_key:
+                        return JSONResponse(
+                            {"error": "unauthorized"},
+                            status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                    return await call_next(request)
+
+            app.add_middleware(_BearerAuthMiddleware)
+
+        port = int(os.environ.get("PORT", "8000"))
+        uvicorn.run(app, host="localhost", port=port)
+    elif transport == "sse":
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
+```
+
+### pyproject.toml: 依存関係追加
+
+```toml
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "youtube-transcript-api>=1.0.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.20.0",
+]
+```
+
+## 起動方法
+
+```bash
+# stdio (デフォルト・Claude Code の MCP として使う場合)
+uv run python server.py
+
+# SSE transport
+MCP_TRANSPORT=sse uv run python server.py
+# ポート変更: FASTMCP_PORT=9000 MCP_TRANSPORT=sse uv run python server.py
+
+# StreamableHTTP transport (既存)
+MCP_TRANSPORT=streamable-http uv run python server.py
+# Bearer 認証付き: API_KEY=secret PORT=8080 MCP_TRANSPORT=streamable-http uv run python server.py
+```
+
+SSE の endpoint: `http://localhost:8000/sse`
+
+## 確認方法
+
+```bash
+# SSE モードで起動
+MCP_TRANSPORT=sse uv run python server.py &
+
+# ヘルスチェック (SSE endpoint に接続確認)
+curl -N http://localhost:8000/sse
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/kentaro/.claude/projects/-Users-kentaro-area-of-responsibility-extend-claude-yt-transcript-yt-transcript-mcp/b09c3c66-9f0c-4b0b-b51e-b86fc327fc48.jsonl
+
+---
+
+# Debug Skill
+
+Help the user debug an issue they're encountering in this current Claude Code session.
+
+## Session Debug Log
+
+The debug log for the current session is at: `/Users/kentaro/.claude/debug/f6cda916-7889-46fa-8f22-76ca3ecbc31f.txt`
+
+Total lines: 171
+
+### Last 20 lines
+
+```
+Copied transcript to: .entire/metadata/f6cda916-7889-46fa-8f22-76ca3ecbc31f/full.jsonl
+Extracted 1 prompt(s) to: .entire/metadata/f6cda916-7889-46fa-8f22-76ca3ecbc31f/prompt.txt
+Extracted summary to: .entire/metadata/f6cda916-7889-46fa-8f22-76ca3ecbc31f/summary.txt
+Using commit message: Implement the following plan:
+
+# Plan: HTTP/SSE モードでの起動対応
+
+## Context
+`s
+Files modified during session (2):
+  - server.py
+  - pyproject.toml
+New files created (1):
+  - .claude/settings.local.json
+Created context file: .entire/metadata/f6cda916-7889-46fa-8f22-76ca3ecbc31f/context.md
+Committed changes to shadow branch 'entire/ca3c615-e3b0c4'
+2026-02-27T12:38:13.724Z [DEBUG] [useDeferredValue] Messages deferred by 2 (24→26)
+2026-02-27T12:38:13.732Z [DEBUG] High write ratio: blit=0, write=4356 (100.0% writes), screen=176x60
+2026-02-27T12:38:13.733Z [DEBUG] Stopped caffeinate, allowing sleep
+
+```
+
+For additional context, grep for [ERROR] and [WARN] lines across the full file.
+
+## Issue Description
+
+The user did not describe a specific issue. Read the debug log and summarize any errors, warnings, or notable issues.
+
+## Settings
+
+Remember that settings are in:
+* user - /Users/kentaro/.claude/settings.json
+* project - /Users/kentaro/area_of_responsibility/extend_claude/yt-transcript/yt-transcript-mcp/.claude/settings.json
+* local - /Users/kentaro/area_of_responsibility/extend_claude/yt-transcript/yt-transcript-mcp/.claude/settings.local.json
+
+## Instructions
+
+1. Review the user's issue description
+2. The last 20 lines show the debug file format. Look for [ERROR] and [WARN] entries, stack traces, and failure patterns across the file
+3. Consider launching the claude-code-guide subagent to understand the relevate Claude Code features
+4. Explain what you found in plain language
+5. Suggest concrete fixes or next steps
+
+---
+
+以下を実行
+1. `README.md` に仕様を反映し、更新。
+2. git に変更を記録
