@@ -1,0 +1,198 @@
+Implement the following plan:
+
+# リモート MCP サーバー化プラン（Fly.io + Bearer Token 認証）
+
+## Context
+
+現在の MCP サーバーは stdio トランスポートでローカル専用。
+Claude.ai アプリや ChatGPT アプリから接続するには、インターネット経由でアクセス可能な
+HTTP エンドポイントが必要。両アプリとも **Streamable HTTP** トランスポートを使用し、
+Bearer Token 認証をサポートする。
+
+デプロイ先: **Fly.io**（東京リージョン、MCP サーバーに推奨）
+認証方式: **Bearer Token**（環境変数 `API_KEY` で管理）
+
+## 変更ファイル一覧
+
+| ファイル | 変更種別 |
+|---------|---------|
+| `server.py` | 修正（末尾のエントリポイントのみ） |
+| `Dockerfile` | 新規作成 |
+| `fly.toml` | 新規作成 |
+
+---
+
+## 1. server.py の変更
+
+**対象箇所**: 末尾の `mcp.run()` 呼び出し（現在 460 行目付近）
+
+### 修正前
+```python
+if __name__ == "__main__":
+    mcp.run()
+```
+
+### 修正後
+```python
+if __name__ == "__main__":
+    import os
+
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        import uvicorn
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+
+        app = mcp.streamable_http_app()
+
+        api_key = os.environ.get("API_KEY")
+        if api_key:
+            class _BearerAuthMiddleware(BaseHTTPMiddleware):
+                async def dispatch(self, request: Request, call_next):
+                    auth = request.headers.get("Authorization", "")
+                    if not auth.startswith("Bearer ") or auth[7:] != api_key:
+                        return JSONResponse(
+                            {"error": "unauthorized"},
+                            status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                    return await call_next(request)
+
+            app.add_middleware(_BearerAuthMiddleware)
+
+        port = int(os.environ.get("PORT", "8000"))
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        mcp.run()
+```
+
+**ポイント**:
+- `MCP_TRANSPORT=streamable-http` のときだけ HTTP モードに切り替え
+- デフォルトは stdio のまま（ローカル Claude Code 接続は変更不要）
+- `API_KEY` 未設定時は認証なし（開発時に便利）
+- `starlette`・`uvicorn` は `mcp[cli]` の依存に含まれており追加インストール不要
+
+---
+
+## 2. Dockerfile（新規作成）
+
+```dockerfile
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --extra ytdlp
+
+COPY server.py .
+
+ENV MCP_TRANSPORT=streamable-http
+ENV PORT=8000
+
+CMD ["uv", "run", "python", "server.py"]
+```
+
+**ポイント**:
+- `uv` の公式 Docker イメージからバイナリをコピー（軽量）
+- `--extra ytdlp` で yt-dlp も含めてインストール
+- `uv.lock` を使って再現性を確保
+
+---
+
+## 3. fly.toml（新規作成）
+
+```toml
+app = "yt-transcript-mcp"
+primary_region = "nrt"
+
+[build]
+
+[env]
+  MCP_TRANSPORT = "streamable-http"
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+```
+
+**ポイント**:
+- `nrt`（東京）リージョンで低レイテンシ
+- `auto_stop_machines = "stop"` / `min_machines_running = 0` でコスト最小化
+- `force_https = true` で HTTPS 強制
+- `API_KEY` はソースに含めず `fly secrets` で管理
+
+---
+
+## デプロイ手順
+
+```bash
+# 1. flyctl インストール（未済の場合）
+brew install flyctl && fly auth login
+
+# 2. app 名を決めて初期化（fly.toml を自動生成しない場合は手動作成）
+fly launch --no-deploy
+
+# 3. API キーをシークレットに登録
+fly secrets set API_KEY=$(openssl rand -hex 32)
+
+# 4. デプロイ
+fly deploy
+
+# 5. URL 確認
+fly info
+```
+
+デプロイ後の MCP エンドポイント: `https://<app-name>.fly.dev/mcp`
+
+---
+
+## Claude.ai / ChatGPT への登録
+
+**Claude.ai**:
+Settings → Integrations → Add MCP Server
+- URL: `https://<app-name>.fly.dev/mcp`
+- Authorization Header: `Bearer <API_KEY>`
+
+**ChatGPT**:
+Settings → Connectors → Add → Custom Connector
+- URL: `https://<app-name>.fly.dev/mcp`
+- Authorization Header: `Bearer <API_KEY>`
+
+---
+
+## 検証方法
+
+```bash
+# curl で直接テスト（デプロイ後）
+curl -X POST https://<app-name>.fly.dev/mcp \
+  -H "Authorization: Bearer <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+
+# ローカルで HTTP モード動作確認
+MCP_TRANSPORT=streamable-http API_KEY=test uv run python server.py &
+curl -X POST http://localhost:8000/mcp \
+  -H "Authorization: Bearer test" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/kentaro/.claude/projects/-Users-kentaro-area-of-responsibility-extend-claude-yt-transcript-yt-transcript-mcp/437faac5-8c4b-4af5-91e4-d4dd91db9ca8.jsonl
+
+---
+
+localhost に変更して
