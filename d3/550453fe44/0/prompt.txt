@@ -1,0 +1,149 @@
+Implement the following plan:
+
+# yt-transcript-mcp 動作検証・修正プラン
+
+## Context
+
+ユーザーはYouTube動画のURLを貼るだけで文字起こしを取得できるMCPサーバーの雛形を持っている。
+NotebookLMやGeminiのように「YouTubeをソースとして扱う」ワークフローを実現したい。
+コードは書かれているが、実際に機能するかを評価・修正する必要がある。
+
+---
+
+## 現状評価
+
+### インストール済みバージョン（uv.lock確認済み）
+
+| ライブラリ | バージョン | 状態 |
+|---|---|---|
+| `youtube-transcript-api` | 1.2.4 | ✅ インストール済み |
+| `mcp` | 1.26.0 | ✅ インストール済み |
+| `pydantic` | 最新 | ✅ インストール済み |
+| `yt-dlp` | 未確認 | ⚠️ optional依存（手動インストール要） |
+
+---
+
+## 問題箇所の評価
+
+### 🔴 Critical: ツール引数のスキーマ問題（`server.py:379`）
+
+```python
+async def youtube_get_transcript(params: GetTranscriptInput) -> str:
+```
+
+FastMCPは`params: GetTranscriptInput`という定義を見ると、ツールスキーマが以下のようになる：
+```json
+{"properties": {"params": {"type": "object", "properties": {"url": ...}}}}
+```
+
+Claudeは`{"params": {"url": "...", "languages": [...]}}`という形式で呼ばなければならず、
+フラットな`{"url": "...", "languages": [...]}`では**呼び出しが失敗する可能性がある**。
+
+**修正方法**: 引数をフラットに展開する。
+
+```python
+async def youtube_get_transcript(
+    url: str,
+    languages: Optional[list[str]] = None,
+    include_timestamps: bool = False,
+    include_metadata: bool = True,
+) -> str:
+```
+
+### 🟡 Minor: `_get_metadata_via_ytdlp`の`--no-download`フラグ（`server.py:204`）
+
+```python
+["yt-dlp", "--dump-json", "--no-download", "--no-warnings", url]
+```
+
+`--no-download`は存在しないフラグ。正しくは`--skip-download`。
+ただし`--dump-json`単体でも動作するため、**実害は軽微**（エラー無視されるか、yt-dlpが警告を出すがJSONは返す）。
+
+### 🟡 Minor: 非同期関数内の同期ブロッキングI/O（`server.py:379`）
+
+`async def`で定義されているが、内部の全ネットワーク処理（`urllib.request`, `subprocess.run`）は同期処理。
+エラーにはならないが、MCPサーバー全体をブロックする。今は許容範囲。
+
+### 🟢 OK: youtube-transcript-api 1.2.4の属性アクセス
+
+```python
+"text": e.text,    # ✅ v1.x のFetchedTranscriptSnippetオブジェクト
+"start": round(e.start, 2),
+"duration": round(e.duration, 2),
+```
+
+v1.x ではデータクラスオブジェクトが返るため、`.text`, `.start`, `.duration`は正しい。
+
+### 🟢 OK: URL解析ロジック（`server.py:38-57`）
+
+`youtube.com/watch?v=`, `youtu.be/`, `shorts/`, `embed/`、裸のVideoIDを正規表現で処理。適切に実装されている。
+
+---
+
+## 修正プラン
+
+### Step 1: Criticalな引数スキーマ問題を修正
+
+**対象ファイル**: `server.py`
+
+ツール関数のシグネチャを Pydantic モデルではなくフラットな引数に変更する。
+`GetTranscriptInput`クラス自体は残しつつ、ツール関数内で手動で構築する。
+
+変更箇所:
+- `server.py:379` のツール関数シグネチャを変更
+- 関数内部で `params.url` → `url` などに書き換え
+
+### Step 2: `--no-download` → `--skip-download` 修正
+
+**対象ファイル**: `server.py:204`
+
+軽微だが正確さのために修正。
+
+### Step 3: 動作検証（Claude Code への登録）
+
+```bash
+# 仮想環境を確認
+cd /Users/kentaro/area_of_responsibility/extend_claude/yt-transcript/yt-transcript-mcp
+
+# サーバーをClaude Codeに登録（グローバル）
+claude mcp add --scope user youtube -- uv run --directory . python server.py
+```
+
+登録後、テスト:
+```
+この動画を要約して: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+```
+
+---
+
+## 修正対象ファイル
+
+| ファイル | 変更内容 |
+|---|---|
+| `server.py:369-444` | `youtube_get_transcript`関数のシグネチャをフラット引数に変更 |
+| `server.py:204` | `--no-download` → `--skip-download`（軽微） |
+
+---
+
+## 検証方法
+
+1. `python server.py` が起動エラーなく動くか確認
+2. `claude mcp add` で登録後、Claude CodeにURLを貼って文字起こしが返ってくるか確認
+3. 日本語字幕がある動画でテスト（例: NHKや有名日本語チャンネル）
+4. 字幕がない動画でエラーメッセージが適切に返るか確認
+
+---
+
+## 将来の拡張候補（READMEより、今回は対象外）
+
+- Whisper連携（字幕なし動画の文字起こし）
+- プレイリスト対応
+- SQLiteキャッシュ
+- Obsidian直接保存
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/kentaro/.claude/projects/-Users-kentaro-area-of-responsibility-extend-claude-yt-transcript-yt-transcript-mcp/d13110fc-6998-4aeb-bb35-4f0a57fb7dfc.jsonl
+
+---
+
+動作をテストしたい。gitで安全に行なって
