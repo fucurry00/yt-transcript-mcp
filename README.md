@@ -70,7 +70,46 @@ uv pip install yt-dlp
 claude mcp add youtube -- python /path/to/youtube-transcript-mcp/server.py
 
 # またはグローバルに
-claude mcp add --scope user youtube -- python /path/to/youtube-transcript-mcp/server.py
+claude mcp add --scope user youtube -- uv run --directory /path/to/youtube-transcript-mcp python server.py
+```
+
+### 4. HTTP サーバーとして起動する
+
+`MCP_TRANSPORT` 環境変数でトランスポートを切り替えられる。
+
+| `MCP_TRANSPORT` | プロトコル | エンドポイント | 用途 |
+| --------------- | ---------- | -------------- | ---- |
+| (未設定 / `stdio`) | stdio | - | Claude Desktop / Claude Code（デフォルト） |
+| `sse` | SSE | `http://HOST:PORT/sse` | リモートMCPクライアント |
+| `streamable-http` | Streamable HTTP | `http://HOST:PORT/mcp` | リモートMCPクライアント |
+
+#### SSE モード
+
+```bash
+# 起動（デフォルト: 127.0.0.1:8000）
+MCP_TRANSPORT=sse uv run python server.py
+
+# ポート変更
+FASTMCP_PORT=9000 MCP_TRANSPORT=sse uv run python server.py
+
+# ホスト変更（外部公開する場合）
+FASTMCP_HOST=0.0.0.0 FASTMCP_PORT=8080 MCP_TRANSPORT=sse uv run python server.py
+```
+
+接続確認:
+
+```bash
+curl -N http://localhost:8000/sse
+```
+
+#### Streamable HTTP モード（Bearer 認証対応）
+
+```bash
+# 起動
+MCP_TRANSPORT=streamable-http uv run python server.py
+
+# Bearer 認証付き・ポート変更
+API_KEY=secret PORT=8080 MCP_TRANSPORT=streamable-http uv run python server.py
 ```
 
 ## 使い方
