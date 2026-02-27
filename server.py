@@ -61,7 +61,7 @@ def _get_transcript_via_api(video_id: str, languages: list[str]) -> dict:
     """Use youtube-transcript-api (Python library) to fetch transcript."""
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+    transcript_list = YouTubeTranscriptApi().list(video_id)
 
     # Try manual (human-created) transcripts first
     transcript = None
