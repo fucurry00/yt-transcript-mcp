@@ -1,0 +1,73 @@
+Implement the following plan:
+
+# Plan: SSE削除・streamable-http一本化
+
+## Context
+
+MCPのSSEトランスポートは2025年3月26日のMCP仕様更新で非推奨化された。
+streamable-httpが現行標準であり、claude.ai・Claude Code双方が対応済み。
+また、リモートデプロイ時はHTTPS必須（fly.io等がエッジでTLS終端し、内部はHTTP）。
+SSEを残す理由がないため削除し、streamable-httpに一本化する。
+
+## 変更ファイル
+
+- `server.py`
+- `README.md`
+
+## server.py の変更
+
+`__main__` ブロックから `elif transport == "sse":` の分岐を削除。
+
+```python
+# 変更前
+if transport == "streamable-http":
+    ...
+elif transport == "sse":
+    mcp.run(transport="sse")
+else:
+    mcp.run()
+
+# 変更後
+if transport == "streamable-http":
+    ...
+else:
+    mcp.run()  # stdio (default)
+```
+
+`MCP_TRANSPORT` の有効値は `streamable-http` と（未設定）stdio のみになる。
+
+## README.md の変更
+
+### トランスポート表
+
+| `MCP_TRANSPORT`    | プロトコル      | エンドポイント         | 用途 |
+| ------------------ | --------------- | ---------------------- | ---- |
+| (未設定 / `stdio`) | stdio           | -                      | Claude Desktop / Claude Code |
+| `streamable-http`  | Streamable HTTP | `https://your-app/mcp` | Web版Claude等のリモートクライアント |
+
+### 起動オプションセクション
+
+SSEの例を削除し、streamable-httpのみ記載。
+
+### 注記追加
+
+SSEが非推奨である旨の簡単な補足をHTTPS要件とあわせて記載。
+
+## 検証
+
+```bash
+uv run python -c "import server; print('OK')"
+```
+
+起動確認:
+```bash
+MCP_TRANSPORT=streamable-http uv run python server.py &
+curl http://localhost:8000/mcp  # 200 or 404 (疎通確認)
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/kentaro/.claude/projects/-Users-kentaro-area-of-responsibility-extend-claude-yt-transcript-yt-transcript-mcp/d18253b7-561f-468f-8da2-1dce4564e631.jsonl
+
+---
+
+commit and push (in this repository, `gh` command line is allowd)
