@@ -1,0 +1,20 @@
+このサーバーが持つ機能について教えて
+
+---
+
+@server.py ここから判定
+
+---
+
+コードが肥大化したと感じているため、機能を洗い出し削るものは削りたい。使用した感じyoutube-transcript-apiだけでうまく動作していると感じている。この機能と作成者、日時、動画の概要などのデータをとってくるだけで問題ない
+
+---
+
+コミットして
+
+---
+
+Argument of type "dict[str, str | bool]" cannot be assigned to parameter "annotations" of type "ToolAnnotations | None" in function "tool"
+  Type "dict[str, str | bool]" is not assignable to type "ToolAnnotations | None"
+    "dict[str, str | bool]" is not assignable to "ToolAnnotations"
+    "dict[str, str | bool]" is not assignable to "None" 218 ~ 227 行において型エラーが発生しているようだ？検証して
