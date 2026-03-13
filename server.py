@@ -13,6 +13,7 @@ import subprocess
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -217,13 +218,13 @@ def _build_output(
 
 @mcp.tool(
     name="youtube_get_transcript",
-    annotations={
-        "title": "Get YouTube Transcript",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
+    annotations=ToolAnnotations(
+        title="Get YouTube Transcript",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
 )
 async def youtube_get_transcript(
     url: str,
