@@ -5,7 +5,7 @@ Claude（claude.ai / Claude Code）からGemini、NotebookLMのように動画�
 
 ## 機能
 
-- YouTube URL or Video ID → トランスクリプト取得
+- YouTube URL or Video ID → トランスクリプト取得（watch / shorts / embed / youtu.be 形式に対応）
 - 手動字幕を優先、なければ自動生成字幕にフォールバック
 - YAML frontmatter付きMarkdown形式で出力（Obsidianと互換）
 - 多言語対応（デフォルト: 日本語 → 英語 → 韓国語）
@@ -128,12 +128,12 @@ Claudeが自動的に `youtube_get_transcript` ツールを呼び出し、トラ
 
 ### パラメータ
 
-| パラメータ           | デフォルト          | 説明                                 |
-| -------------------- | ------------------- | ------------------------------------ |
-| `url`                | (必須)              | YouTube URL or 動画ID                |
+| パラメータ           | デフォルト           | 説明                                 |
+| -------------------- | -------------------- | ------------------------------------ |
+| `url`                | (必須)               | YouTube URL or 動画ID（watch / shorts / embed / youtu.be / 11文字ID） |
 | `languages`          | `["ja", "en", "ko"]` | 優先言語リスト                       |
-| `include_timestamps` | `false`             | `[MM:SS]` タイムスタンプを含める     |
-| `include_metadata`   | `true`              | タイトル・著者等のメタデータを含める |
+| `include_timestamps` | `false`              | `[MM:SS]` タイムスタンプを含める     |
+| `include_metadata`   | `true`               | タイトル・著者等のメタデータを含める |
 
 ## アーキテクチャ
 
@@ -171,7 +171,7 @@ Markdown + YAML frontmatter で出力
 ### メタデータが "Unknown" になる
 
 - `yt-dlp` がインストールされていない場合、メタデータは取得されない
-- `pip install yt-dlp` で解決
+- `uv pip install yt-dlp` で解決
 
 ## 今後の拡張案
 
@@ -179,4 +179,4 @@ Markdown + YAML frontmatter で出力
 - [ ] Whisper連携: 字幕がない動画 → 音声DL → Whisperで文字起こし
 - [ ] バッチ処理: プレイリストURL → 複数動画の一括取得
 - [ ] キャッシュ: 同じ動画の再取得を避ける（SQLiteなど）
-- [ ] Obsidian直接保存: 取得結果を指定ディレクトリに自動保存
+- [ ] フレーム取得: 表やスライドなどの視覚情報 → より豊富な情報源 (ただ、使用トークンが増える可能性アリ)
