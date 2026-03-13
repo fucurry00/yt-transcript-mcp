@@ -175,6 +175,7 @@ Markdown + YAML frontmatter で出力
 
 ## 今後の拡張案
 
+- [ ] ツール docstring の軽量化: `Useful for:` や `Args:` の詳細説明を Claude Code skill に移管し、MCPツール側の description を最小限にする
 - [ ] Whisper連携: 字幕がない動画 → 音声DL → Whisperで文字起こし
 - [ ] バッチ処理: プレイリストURL → 複数動画の一括取得
 - [ ] キャッシュ: 同じ動画の再取得を避ける（SQLiteなど）
