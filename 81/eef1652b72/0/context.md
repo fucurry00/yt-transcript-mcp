@@ -1,0 +1,31 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+このサーバーが持つ機能について教えて
+
+### Prompt 2
+
+@server.py ここから判定
+
+### Prompt 3
+
+コードが肥大化したと感じているため、機能を洗い出し削るものは削りたい。使用した感じyoutube-transcript-apiだけでうまく動作していると感じている。この機能と作成者、日時、動画の概要などのデータをとってくるだけで問題ない
+
+### Prompt 4
+
+コミットして
+
+### Prompt 5
+
+Argument of type "dict[str, str | bool]" cannot be assigned to parameter "annotations" of type "ToolAnnotations | None" in function "tool"
+  Type "dict[str, str | bool]" is not assignable to type "ToolAnnotations | None"
+    "dict[str, str | bool]" is not assignable to "ToolAnnotations"
+    "dict[str, str | bool]" is not assignable to "None" 218 ~ 227 行において型エラーが発生しているようだ？検証して
+
+### Prompt 6
+
+コード内コメントを必要な分量に抑え、必要ないものはドキュメントに移行する方が良さそうだ。
+
