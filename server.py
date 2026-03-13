@@ -10,17 +10,14 @@ import json
 import re
 import shutil
 import subprocess
-from enum import Enum
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-SUPPORTED_LANGUAGES = ["ja", "en", "ko", "zh", "de", "fr", "es", "pt", "ru"]
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
 
@@ -28,7 +25,7 @@ MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
 # Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("youtube_mcp")
+mcp = FastMCP("yt-transcript-mcp")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,13 +54,12 @@ def _extract_video_id(url_or_id: str) -> str:
     )
 
 
-def _get_transcript_via_api(video_id: str, languages: list[str]) -> dict:
-    """Use youtube-transcript-api (Python library) to fetch transcript."""
+def _get_transcript(video_id: str, languages: list[str]) -> dict:
+    """Fetch transcript using youtube-transcript-api."""
     from youtube_transcript_api import YouTubeTranscriptApi
 
     transcript_list = YouTubeTranscriptApi().list(video_id)
 
-    # Try manual (human-created) transcripts first
     transcript = None
     source = "unknown"
     lang_found = "unknown"
@@ -77,7 +73,6 @@ def _get_transcript_via_api(video_id: str, languages: list[str]) -> dict:
         except Exception:
             continue
 
-    # Fall back to auto-generated
     if transcript is None:
         for lang in languages:
             try:
@@ -89,7 +84,6 @@ def _get_transcript_via_api(video_id: str, languages: list[str]) -> dict:
                 continue
 
     if transcript is None:
-        # Last resort: try any available transcript
         try:
             available = list(transcript_list)
             if available:
@@ -121,79 +115,7 @@ def _get_transcript_via_api(video_id: str, languages: list[str]) -> dict:
     }
 
 
-def _get_transcript_via_ytdlp(video_id: str, languages: list[str]) -> dict:
-    """Fallback: use yt-dlp CLI to fetch subtitles."""
-    if not shutil.which("yt-dlp"):
-        raise RuntimeError("yt-dlp is not installed. Install with: pip install yt-dlp")
-
-    lang_str = ",".join(languages)
-    url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # Try manual subs first, then auto
-    for sub_flag in ["--write-sub", "--write-auto-sub"]:
-        result = subprocess.run(
-            [
-                "yt-dlp",
-                sub_flag,
-                "--sub-lang",
-                lang_str,
-                "--sub-format",
-                "json3",
-                "--skip-download",
-                "--no-warnings",
-                "-o",
-                f"/tmp/yt_{video_id}",
-                "--print-json",
-                url,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            continue
-
-        # Find the subtitle file
-        import glob
-
-        sub_files = glob.glob(f"/tmp/yt_{video_id}*.json3")
-        if not sub_files:
-            continue
-
-        with open(sub_files[0], "r", encoding="utf-8") as f:
-            sub_data = json.load(f)
-
-        # Clean up
-        for sf in sub_files:
-            import os
-
-            os.remove(sf)
-
-        entries = []
-        for event in sub_data.get("events", []):
-            text_parts = []
-            for seg in event.get("segs", []):
-                t = seg.get("utf8", "").strip()
-                if t:
-                    text_parts.append(t)
-            if text_parts:
-                entries.append(
-                    {
-                        "text": " ".join(text_parts),
-                        "start": round(event.get("tStartMs", 0) / 1000, 2),
-                        "duration": round(event.get("dDurationMs", 0) / 1000, 2),
-                    }
-                )
-
-        source = "manual" if sub_flag == "--write-sub" else "auto-generated"
-        return {"entries": entries, "language": "detected", "source": source}
-
-    raise RuntimeError(
-        f"yt-dlp could not find subtitles for {video_id} in languages: {languages}"
-    )
-
-
-def _get_metadata_via_ytdlp(video_id: str) -> dict:
+def _get_metadata(video_id: str) -> dict:
     """Fetch video metadata using yt-dlp --dump-json."""
     url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -225,34 +147,7 @@ def _get_metadata_via_ytdlp(video_id: str) -> dict:
     return {"title": "Unknown", "author": "Unknown", "video_id": video_id}
 
 
-def _get_metadata_via_api(video_id: str) -> dict:
-    """Fetch basic metadata using youtube-transcript-api's page scraping."""
-    # youtube-transcript-api doesn't provide metadata, so we do a minimal scrape
-    import html
-    import urllib.request
-
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            page = resp.read().decode("utf-8", errors="replace")
-
-        title_match = re.search(r"<title>(.*?)</title>", page)
-        title = (
-            html.unescape(title_match.group(1)).replace(" - YouTube", "").strip()
-            if title_match
-            else "Unknown"
-        )
-
-        author_match = re.search(r'"ownerChannelName":"(.*?)"', page)
-        author = html.unescape(author_match.group(1)) if author_match else "Unknown"
-
-        return {"title": title, "author": author, "video_id": video_id}
-    except Exception:
-        return {"title": "Unknown", "author": "Unknown", "video_id": video_id}
-
-
-def _format_transcript_text(entries: list[dict], include_timestamps: bool) -> str:
+def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
     """Format transcript entries into readable text."""
     lines = []
     for e in entries:
@@ -268,11 +163,8 @@ def _format_transcript_text(entries: list[dict], include_timestamps: bool) -> st
     return "\n".join(lines)
 
 
-def _build_markdown_output(
-    metadata: dict,
-    transcript_text: str,
-    transcript_info: dict,
-    video_id: str,
+def _build_output(
+    metadata: dict, transcript_text: str, transcript_info: dict, video_id: str
 ) -> str:
     """Build the final Markdown output with YAML frontmatter."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -309,7 +201,6 @@ def _build_markdown_output(
 
 {transcript_text}
 """
-    # Truncate if too large
     if len(output) > MAX_TRANSCRIPT_CHARS:
         output = (
             output[:MAX_TRANSCRIPT_CHARS]
@@ -317,48 +208,6 @@ def _build_markdown_output(
         )
 
     return output
-
-
-# ---------------------------------------------------------------------------
-# Input Models
-# ---------------------------------------------------------------------------
-
-
-class GetTranscriptInput(BaseModel):
-    """Input for fetching a YouTube video transcript."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    url: str = Field(
-        ...,
-        description=(
-            "YouTube video URL or video ID. "
-            "Accepts formats: youtube.com/watch?v=..., youtu.be/..., "
-            "youtube.com/shorts/..., or a bare 11-char video ID."
-        ),
-        min_length=1,
-    )
-    languages: Optional[list[str]] = Field(
-        default=None,
-        description=(
-            f"Preferred languages in priority order. Defaults to {DEFAULT_LANGUAGES}. "
-            f"Supported: {SUPPORTED_LANGUAGES} (and others available on the video)."
-        ),
-    )
-    include_timestamps: bool = Field(
-        default=False,
-        description="Include [MM:SS] timestamps for each line of the transcript.",
-    )
-    include_metadata: bool = Field(
-        default=True,
-        description="Include video metadata (title, author, etc.) in the output.",
-    )
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        v = v.strip().strip("<>")  # strip angle brackets some people paste
-        return v
 
 
 # ---------------------------------------------------------------------------
@@ -395,61 +244,34 @@ async def youtube_get_transcript(
         url: YouTube video URL or video ID. Accepts youtube.com/watch?v=...,
             youtu.be/..., youtube.com/shorts/..., or a bare 11-char video ID.
         languages: Preferred languages in priority order. Defaults to ["ja", "en", "ko"].
-            Supported: ja, en, ko, zh, de, fr, es, pt, ru (and others on the video).
         include_timestamps: Include [MM:SS] timestamps for each line of the transcript.
         include_metadata: Include video metadata (title, author, etc.) in the output.
 
     Returns:
         str: Markdown-formatted transcript with YAML frontmatter
     """
-    # Strip angle brackets some people paste around URLs
     url = url.strip().strip("<>")
     video_id = _extract_video_id(url)
     langs = languages or DEFAULT_LANGUAGES
 
-    # --- Fetch transcript ---
-    transcript_info = None
-    errors = []
-
-    # Strategy 1: youtube-transcript-api (preferred, lightweight)
     try:
-        transcript_info = _get_transcript_via_api(video_id, langs)
+        transcript_info = _get_transcript(video_id, langs)
     except Exception as e:
-        errors.append(f"youtube-transcript-api: {e}")
-
-    # Strategy 2: yt-dlp fallback
-    if transcript_info is None:
-        try:
-            transcript_info = _get_transcript_via_ytdlp(video_id, langs)
-        except Exception as e:
-            errors.append(f"yt-dlp: {e}")
-
-    if transcript_info is None:
         return (
-            f"Error: Could not retrieve transcript for video {video_id}.\n"
-            f"Attempted methods:\n" + "\n".join(f"  - {e}" for e in errors) + "\n\n"
+            f"Error: Could not retrieve transcript for video {video_id}.\n{e}\n\n"
             "Possible causes:\n"
             "  - The video has no captions/subtitles\n"
             "  - The video is private or age-restricted\n"
             "  - The requested languages are not available"
         )
 
-    transcript_text = _format_transcript_text(
-        transcript_info["entries"], include_timestamps
-    )
+    transcript_text = _format_transcript(transcript_info["entries"], include_timestamps)
 
-    # --- Fetch metadata ---
     metadata = {"title": "Unknown", "author": "Unknown", "video_id": video_id}
     if include_metadata:
-        try:
-            metadata = _get_metadata_via_ytdlp(video_id)
-        except Exception:
-            try:
-                metadata = _get_metadata_via_api(video_id)
-            except Exception:
-                pass
+        metadata = _get_metadata(video_id)
 
-    return _build_markdown_output(metadata, transcript_text, transcript_info, video_id)
+    return _build_output(metadata, transcript_text, transcript_info, video_id)
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +293,7 @@ if __name__ == "__main__":
 
         api_key = os.environ.get("API_KEY")
         if api_key:
+
             class _BearerAuthMiddleware(BaseHTTPMiddleware):
                 async def dispatch(self, request: Request, call_next):
                     auth = request.headers.get("Authorization", "")
