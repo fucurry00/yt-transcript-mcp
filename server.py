@@ -282,7 +282,5 @@ if __name__ == "__main__":
 
         port = int(os.environ.get("PORT", "8000"))
         uvicorn.run(app, host="localhost", port=port)
-    elif transport == "sse":
-        mcp.run(transport="sse")
     else:
-        mcp.run()
+        mcp.run()  # stdio (default)

@@ -1,7 +1,9 @@
 # YouTube Transcript MCP Server
 
+[!NOTE]: このプロジェクトは初学者によりバイブコーディングされています。
+
 YouTube動画のURLを貼るだけで、文字起こし（字幕）を自動取得するMCPサーバー。
-Claude（claude.ai / Claude Code）からGemini、NotebookLMのように動画内容を扱えるようになる。
+Claude（Claude Desktop / Claude Code）からGemini、NotebookLMのように動画内容を扱えるようになる。
 
 ## 機能
 
@@ -77,43 +79,53 @@ claude mcp add youtube -- python /path/to/yt-transcript-mcp/server.py
 claude mcp add --scope user youtube -- uv run --directory /path/to/yt-transcript-mcp python server.py
 ```
 
-### 4. HTTP サーバーとして起動する
+### 4. リモートサーバにデプロイする
 
-`MCP_TRANSPORT` 環境変数でトランスポートを切り替えられる。
+Web版Claude（claude.ai）やChatGPTなどのWebクライアントから使うには、fly.io等の外部サーバにホストする必要がある。ローカルのstdioとは異なり、HTTPSで公開されたエンドポイントに接続する形になる。
 
 | `MCP_TRANSPORT`    | プロトコル      | エンドポイント         | 用途                                       |
 | ------------------ | --------------- | ---------------------- | ------------------------------------------ |
 | (未設定 / `stdio`) | stdio           | -                      | Claude Desktop / Claude Code（デフォルト） |
-| `sse`              | SSE             | `http://HOST:PORT/sse` | リモートMCPクライアント                    |
-| `streamable-http`  | Streamable HTTP | `http://HOST:PORT/mcp` | リモートMCPクライアント                    |
+| `streamable-http`  | Streamable HTTP | `https://your-app/mcp` | Web版Claude等のリモートクライアント        |
 
-#### SSE モード
+> **Note:** SSEトランスポートは2025年3月のMCP仕様更新で非推奨になりました。リモート接続にはStreamable HTTPを使用してください。リモートデプロイ時はHTTPS必須（fly.io等がエッジでTLS終端）。
+
+#### fly.io へのデプロイ例
 
 ```bash
-# 起動（デフォルト: 127.0.0.1:8000）
-MCP_TRANSPORT=sse uv run python server.py
+fly launch
+fly secrets set API_KEY=your-secret MCP_TRANSPORT=streamable-http
+fly deploy
+```
 
-# ポート変更
-FASTMCP_PORT=9000 MCP_TRANSPORT=sse uv run python server.py
+`fly.toml` の設定例:
 
-# ホスト変更（外部公開する場合）
-FASTMCP_HOST=0.0.0.0 FASTMCP_PORT=8080 MCP_TRANSPORT=sse uv run python server.py
+```toml
+[env]
+  MCP_TRANSPORT = "streamable-http"
+  FASTMCP_HOST = "0.0.0.0"
+  PORT = "8080"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+```
+
+#### 起動オプション
+
+```bash
+# Streamable HTTP モード + Bearer 認証
+FASTMCP_HOST=0.0.0.0 API_KEY=your-secret MCP_TRANSPORT=streamable-http uv run python server.py
 ```
 
 接続確認:
 
 ```bash
-curl -N http://localhost:8000/sse
-```
-
-#### Streamable HTTP モード（Bearer 認証対応）
-
-```bash
-# 起動
-MCP_TRANSPORT=streamable-http uv run python server.py
-
-# Bearer 認証付き・ポート変更
-API_KEY=secret PORT=8080 MCP_TRANSPORT=streamable-http uv run python server.py
+curl -H "Authorization: Bearer your-secret" https://your-app.fly.dev/mcp
 ```
 
 ## 使い方
@@ -128,12 +140,12 @@ Claudeが自動的に `youtube_get_transcript` ツールを呼び出し、トラ
 
 ### パラメータ
 
-| パラメータ           | デフォルト           | 説明                                 |
-| -------------------- | -------------------- | ------------------------------------ |
+| パラメータ           | デフォルト           | 説明                                                                  |
+| -------------------- | -------------------- | --------------------------------------------------------------------- |
 | `url`                | (必須)               | YouTube URL or 動画ID（watch / shorts / embed / youtu.be / 11文字ID） |
-| `languages`          | `["ja", "en", "ko"]` | 優先言語リスト                       |
-| `include_timestamps` | `false`              | `[MM:SS]` タイムスタンプを含める     |
-| `include_metadata`   | `true`               | タイトル・著者等のメタデータを含める |
+| `languages`          | `["ja", "en", "ko"]` | 優先言語リスト                                                        |
+| `include_timestamps` | `false`              | `[MM:SS]` タイムスタンプを含める                                      |
+| `include_metadata`   | `true`               | タイトル・著者等のメタデータを含める                                  |
 
 ## アーキテクチャ
 
@@ -180,3 +192,4 @@ Markdown + YAML frontmatter で出力
 - [ ] バッチ処理: プレイリストURL → 複数動画の一括取得
 - [ ] キャッシュ: 同じ動画の再取得を避ける（SQLiteなど）
 - [ ] フレーム取得: 表やスライドなどの視覚情報 → より豊富な情報源 (ただ、使用トークンが増える可能性アリ)
+- [ ] web版からの使用: デプロイ可能な設計
