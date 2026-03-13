@@ -1,10 +1,4 @@
-"""
-YouTube Transcript MCP Server
-
-Provides tools for extracting transcripts and metadata from YouTube videos.
-Designed for use with Claude (claude.ai, Claude Code) to enable
-"paste a URL and get the content" workflows similar to NotebookLM.
-"""
+"""YouTube Transcript MCP Server"""
 
 import json
 import re
@@ -15,22 +9,10 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
 
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
-
 mcp = FastMCP("yt-transcript-mcp")
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _extract_video_id(url_or_id: str) -> str:
@@ -45,7 +27,6 @@ def _extract_video_id(url_or_id: str) -> str:
         if match:
             return match.group(1)
 
-    # Bare video ID
     if re.fullmatch(r"[a-zA-Z0-9_-]{11}", url_or_id):
         return url_or_id
 
@@ -211,11 +192,6 @@ def _build_output(
     return output
 
 
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-
 @mcp.tool(
     name="youtube_get_transcript",
     annotations=ToolAnnotations(
@@ -274,10 +250,6 @@ async def youtube_get_transcript(
 
     return _build_output(metadata, transcript_text, transcript_info, video_id)
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import os

@@ -8,7 +8,7 @@ Claude（claude.ai / Claude Code）からGemini、NotebookLMのように動画�
 - YouTube URL or Video ID → トランスクリプト取得
 - 手動字幕を優先、なければ自動生成字幕にフォールバック
 - YAML frontmatter付きMarkdown形式で出力（Obsidianと互換）
-- 多言語対応（デフォルト: 日本語 → 英語）
+- 多言語対応（デフォルト: 日本語 → 英語 → 韓国語）
 - タイムスタンプ付き出力オプション
 
 ## 出力例
@@ -25,6 +25,10 @@ upload_date: 2025-01-15
 duration: 12m30s
 ---
 
+## Description
+
+動画の説明文...
+
 ## Transcript
 
 こんにちは、今日は...
@@ -35,10 +39,10 @@ duration: 12m30s
 ### 1. 依存関係インストール
 
 ```bash
-cd youtube-transcript-mcp
+cd yt-transcript-mcp
 uv pip install -e .
 
-# yt-dlp もフォールバックとして入れておくと安心
+# メタデータ取得（タイトル・著者・日時・概要）に必要
 uv pip install yt-dlp
 ```
 
@@ -49,12 +53,12 @@ uv pip install yt-dlp
 ```json
 {
   "mcpServers": {
-    "youtube": {
+    "yt-transcript-mcp": {
       "command": "uv",
       "args": [
         "run",
         "--directory",
-        "/path/to/youtube-transcript-mcp",
+        "/path/to/yt-transcript-mcp",
         "python",
         "server.py"
       ]
@@ -67,21 +71,21 @@ uv pip install yt-dlp
 
 ```bash
 # プロジェクトに追加
-claude mcp add youtube -- python /path/to/youtube-transcript-mcp/server.py
+claude mcp add youtube -- python /path/to/yt-transcript-mcp/server.py
 
 # またはグローバルに
-claude mcp add --scope user youtube -- uv run --directory /path/to/youtube-transcript-mcp python server.py
+claude mcp add --scope user youtube -- uv run --directory /path/to/yt-transcript-mcp python server.py
 ```
 
 ### 4. HTTP サーバーとして起動する
 
 `MCP_TRANSPORT` 環境変数でトランスポートを切り替えられる。
 
-| `MCP_TRANSPORT` | プロトコル | エンドポイント | 用途 |
-| --------------- | ---------- | -------------- | ---- |
-| (未設定 / `stdio`) | stdio | - | Claude Desktop / Claude Code（デフォルト） |
-| `sse` | SSE | `http://HOST:PORT/sse` | リモートMCPクライアント |
-| `streamable-http` | Streamable HTTP | `http://HOST:PORT/mcp` | リモートMCPクライアント |
+| `MCP_TRANSPORT`    | プロトコル      | エンドポイント         | 用途                                       |
+| ------------------ | --------------- | ---------------------- | ------------------------------------------ |
+| (未設定 / `stdio`) | stdio           | -                      | Claude Desktop / Claude Code（デフォルト） |
+| `sse`              | SSE             | `http://HOST:PORT/sse` | リモートMCPクライアント                    |
+| `streamable-http`  | Streamable HTTP | `http://HOST:PORT/mcp` | リモートMCPクライアント                    |
 
 #### SSE モード
 
@@ -124,37 +128,37 @@ Claudeが自動的に `youtube_get_transcript` ツールを呼び出し、トラ
 
 ### パラメータ
 
-| パラメータ           | デフォルト     | 説明                                 |
-| -------------------- | -------------- | ------------------------------------ |
-| `url`                | (必須)         | YouTube URL or 動画ID                |
-| `languages`          | `["ja", "en"]` | 優先言語リスト                       |
-| `include_timestamps` | `false`        | `[MM:SS]` タイムスタンプを含める     |
-| `include_metadata`   | `true`         | タイトル・著者等のメタデータを含める |
+| パラメータ           | デフォルト          | 説明                                 |
+| -------------------- | ------------------- | ------------------------------------ |
+| `url`                | (必須)              | YouTube URL or 動画ID                |
+| `languages`          | `["ja", "en", "ko"]` | 優先言語リスト                       |
+| `include_timestamps` | `false`             | `[MM:SS]` タイムスタンプを含める     |
+| `include_metadata`   | `true`              | タイトル・著者等のメタデータを含める |
 
 ## アーキテクチャ
 
 ```
-youtube-transcript-api (軽量・推奨)
-         ↓ 失敗時
-      yt-dlp (フォールバック)
-         ↓
-   Markdown + YAML frontmatter で出力
-         ↓
-   Claude がコンテキストとして受け取る
+youtube-transcript-api でトランスクリプト取得
+  （手動字幕 → 自動生成字幕 → 言語問わず最初の字幕の順で試行）
+
+yt-dlp --dump-json でメタデータ取得
+  （タイトル・著者・投稿日・再生時間・概要）
+
+Markdown + YAML frontmatter で出力
+  → Claude がコンテキストとして受け取る
 ```
 
-### なぜ youtube-transcript-api を優先するか
+### トランスクリプト取得に youtube-transcript-api を使う理由
 
 - `yt-dlp` より大幅に軽量（動画ダウンロード機能なし）
 - 字幕取得に特化したAPI
 - Python ライブラリとして直接呼べる（subprocess不要）
 - 手動字幕 / 自動生成字幕の切り替えが簡単
 
-### なぜ yt-dlp をフォールバックに残すか
+### メタデータ取得に yt-dlp を使う理由
 
-- 一部の動画で youtube-transcript-api が取得できないケースがある
-- メタデータ取得（タイトル、著者、再生時間等）に強い
-- 将来的に音声ダウンロード → Whisperで文字起こし というパスも追加可能
+- タイトル・著者・投稿日・再生時間・概要を一度に取得できる
+- youtube-transcript-api はトランスクリプト専用でメタデータを提供しない
 
 ## トラブルシューティング
 
@@ -166,8 +170,8 @@ youtube-transcript-api (軽量・推奨)
 
 ### メタデータが "Unknown" になる
 
-- `yt-dlp` がインストールされていない場合、メタデータの取得精度が下がる
-- `pip install yt-dlp` で改善
+- `yt-dlp` がインストールされていない場合、メタデータは取得されない
+- `pip install yt-dlp` で解決
 
 ## 今後の拡張案
 
