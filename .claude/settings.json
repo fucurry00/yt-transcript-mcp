@@ -69,10 +69,6 @@
           {
             "type": "command",
             "command": "entire hooks claude-code stop"
-          },
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run poe check-type"
           }
         ]
       }

@@ -167,7 +167,7 @@ class OutputFormattingTests(unittest.TestCase):
         transcript_info = {"language": "en", "source": "manual"}
         entries = [
             {"text": "short line", "start": 10.0, "duration": 1.0},
-            {"text": "x" * 80, "start": 11.0, "duration": 1.0},
+            {"text": "x" * 400, "start": 11.0, "duration": 1.0},
         ]
 
         output = server._build_limited_output(
@@ -178,12 +178,12 @@ class OutputFormattingTests(unittest.TestCase):
             include_timestamps=False,
             start_seconds=10.0,
             end_seconds=20.0,
-            max_chars=260,
+            max_chars=500,
         )
 
         self.assertIn("- Transcript range: 10s-20s", output)
         self.assertIn("end_seconds=20", output)
-        self.assertIn("max_chars=260", output)
+        self.assertIn("max_chars=500", output)
 
     def test_build_limited_output_reports_empty_range(self):
         output = server._build_limited_output(

@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
+# Runtime cache
+.transcript_cache/
+
 # OS files
 .DS_Store

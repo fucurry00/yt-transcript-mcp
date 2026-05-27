@@ -201,7 +201,7 @@ def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
         description = description[:500]
     return {
         "title": data.get("title", "Unknown"),
-        "author": data.get("uploader", data.get("channel", "Unknown")),
+        "author": data.get("uploader") or data.get("channel") or "Unknown",
         "channel_url": data.get("channel_url", ""),
         "upload_date": data.get("upload_date", ""),
         "duration_seconds": data.get("duration"),
@@ -219,9 +219,11 @@ def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
         if not text:
             continue
         if include_timestamps:
-            minutes = int(e["start"] // 60)
-            seconds = int(e["start"] % 60)
-            lines.append(f"[{minutes:02d}:{seconds:02d}] {text}")
+            h = int(e["start"] // 3600)
+            m = int((e["start"] % 3600) // 60)
+            s = int(e["start"] % 60)
+            ts = f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
+            lines.append(f"{ts} {text}")
         else:
             lines.append(text)
     return "\n".join(lines)
@@ -369,9 +371,19 @@ def _build_output(
         metadata_lines.append("- Cached: true")
         metadata_lines.append(f"- Cached at: {_markdown_metadata_value(cached_at)}")
 
+    if metadata.get("metadata_error"):
+        err = metadata["metadata_error"]
+        metadata_lines.append(
+            f"- Metadata error: {_markdown_metadata_value(err.get('type', 'unknown'))}"
+        )
+
     description_section = ""
     if metadata.get("description"):
-        description_section = f"\n## Description\n\n{metadata['description']}\n"
+        escaped = "\n".join(
+            f"\\{line}" if line.startswith("#") else line
+            for line in metadata["description"].splitlines()
+        )
+        description_section = f"\n## Description\n\n{escaped}\n"
 
     metadata_section = "\n".join(metadata_lines)
     output = f"""# {title}
@@ -430,40 +442,76 @@ def _build_limited_output(
     if len(full_output) <= max_chars:
         return full_output
 
+    header_output = _build_output(
+        metadata,
+        "",
+        transcript_info,
+        video_id,
+        cached=cached,
+        cached_at=cached_at,
+        transcript_range=transcript_range,
+        max_chars=max_chars,
+    )
+    header_size = len(header_output)
+
+    kept_lines: list[str] = []
     kept_entries: list[dict] = []
     for index, entry in enumerate(display_entries):
-        candidate_entries = kept_entries + [entry]
+        if include_timestamps:
+            h = int(entry["start"] // 3600)
+            m = int((entry["start"] % 3600) // 60)
+            s = int(entry["start"] % 60)
+            ts = f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
+            line = f"{ts} {entry['text'].strip()}"
+        else:
+            line = entry["text"].strip()
+
+        new_line_size = len(line) + (1 if kept_lines else 0)
         next_entry = (
             display_entries[index + 1] if index + 1 < len(display_entries) else None
         )
-        continuation = ""
+        continuation_size = 0
         if next_entry is not None:
-            continuation = _build_continuation_section(
-                video_id,
-                float(next_entry["start"]),
-                max_chars,
-                end_seconds,
+            continuation_size = len(
+                _build_continuation_section(
+                    video_id, float(next_entry["start"]), max_chars, end_seconds
+                )
             )
-        candidate_output = _build_output(
+
+        current_text_size = sum(len(ln) for ln in kept_lines) + (
+            len(kept_lines) if kept_lines else 0
+        )
+        if (
+            header_size + current_text_size + new_line_size + continuation_size
+            > max_chars
+        ):
+            break
+
+        kept_lines.append(line)
+        kept_entries.append(entry)
+
+    if not kept_entries:
+        transcript_text = (
+            "The first transcript entry is too large to display within the "
+            f"max_chars={max_chars} limit. Try increasing max_chars or "
+            "requesting a smaller time range."
+        )
+        return _build_output(
             metadata,
-            _format_transcript(candidate_entries, include_timestamps),
+            transcript_text,
             transcript_info,
             video_id,
             cached=cached,
             cached_at=cached_at,
             transcript_range=transcript_range,
-            continuation_section=continuation,
             max_chars=max_chars,
         )
-        if len(candidate_output) > max_chars:
-            break
-        kept_entries = candidate_entries
 
     next_index = len(kept_entries)
     if next_index >= len(display_entries):
         return _build_output(
             metadata,
-            _format_transcript(kept_entries, include_timestamps),
+            "\n".join(kept_lines),
             transcript_info,
             video_id,
             cached=cached,
@@ -480,7 +528,7 @@ def _build_limited_output(
     )
     return _build_output(
         metadata,
-        _format_transcript(kept_entries, include_timestamps),
+        "\n".join(kept_lines),
         transcript_info,
         video_id,
         cached=cached,
@@ -512,6 +560,8 @@ def _load_cache(video_id: str, languages: list[str]) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if not all(k in data for k in ("entries", "language", "source", "cached_at")):
+            return None
         cached_at = date.fromisoformat(data["cached_at"])
         if (date.today() - cached_at).days > CACHE_TTL_DAYS:
             return None
@@ -586,7 +636,10 @@ async def youtube_get_transcript(
         str: Markdown-formatted transcript
     """
     url = url.strip().strip("<>")
-    video_id = _extract_video_id(url)
+    try:
+        video_id = _extract_video_id(url)
+    except ValueError as e:
+        return str(e)
     langs = languages or DEFAULT_LANGUAGES
     options_error = _validate_transcript_options(
         start_seconds,
@@ -673,7 +726,10 @@ async def youtube_get_video_info(url: str) -> str:
             upload_date, duration_seconds, description (full text), view_count
     """
     url = url.strip().strip("<>")
-    video_id = _extract_video_id(url)
+    try:
+        video_id = _extract_video_id(url)
+    except ValueError as e:
+        return str(e)
     metadata = _get_metadata(video_id, full_description=True)
     return json.dumps(metadata, ensure_ascii=False, indent=2)
 
