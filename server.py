@@ -1,9 +1,12 @@
 """YouTube Transcript MCP Server"""
 
 import json
+import os
 import re
 import shutil
 import subprocess
+from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -11,6 +14,7 @@ from mcp.types import ToolAnnotations
 
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
+CACHE_TTL_DAYS = 180
 
 mcp = FastMCP("yt-transcript-mcp")
 
@@ -19,13 +23,12 @@ def _extract_video_id(url_or_id: str) -> str:
     """Extract video ID from various YouTube URL formats or a bare ID."""
     url_or_id = url_or_id.strip()
 
-    patterns = [
+    match = re.search(
         r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url_or_id)
-        if match:
-            return match.group(1)
+        url_or_id,
+    )
+    if match:
+        return match.group(1)
 
     if re.fullmatch(r"[a-zA-Z0-9_-]{11}", url_or_id):
         return url_or_id
@@ -97,7 +100,7 @@ def _get_transcript(video_id: str, languages: list[str]) -> dict:
     }
 
 
-def _get_metadata(video_id: str) -> dict:
+def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
     """Fetch video metadata using yt-dlp --dump-json."""
     url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -113,13 +116,16 @@ def _get_metadata(video_id: str) -> dict:
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
+            description = data.get("description", "") or ""
+            if not full_description:
+                description = description[:500]
             return {
                 "title": data.get("title", "Unknown"),
                 "author": data.get("uploader", data.get("channel", "Unknown")),
                 "channel_url": data.get("channel_url", ""),
                 "upload_date": data.get("upload_date", ""),
                 "duration_seconds": data.get("duration"),
-                "description": (data.get("description", "") or "")[:500],
+                "description": description,
                 "view_count": data.get("view_count"),
                 "video_id": video_id,
             }
@@ -146,7 +152,13 @@ def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
 
 
 def _build_output(
-    metadata: dict, transcript_text: str, transcript_info: dict, video_id: str
+    metadata: dict,
+    transcript_text: str,
+    transcript_info: dict,
+    video_id: str,
+    *,
+    cached: bool = False,
+    cached_at: str = "",
 ) -> str:
     """Build the final Markdown output with YAML frontmatter."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -171,6 +183,10 @@ def _build_output(
         m, s = divmod(int(metadata["duration_seconds"]), 60)
         frontmatter_fields.append(f"duration: {m}m{s}s")
 
+    if cached:
+        frontmatter_fields.append("cached: true")
+        frontmatter_fields.append(f"cached_at: {cached_at}")
+
     frontmatter = "---\n" + "\n".join(frontmatter_fields) + "\n---"
 
     description_section = ""
@@ -190,6 +206,57 @@ def _build_output(
         )
 
     return output
+
+
+# ── Cache helpers ──────────────────────────────────────────────────────────────
+
+
+def _get_cache_dir() -> Path:
+    cache_env = os.environ.get("CACHE_DIR")
+    if cache_env:
+        return Path(cache_env)
+    return Path(__file__).parent / ".transcript_cache"
+
+
+def _cache_path(video_id: str, languages: list[str]) -> Path:
+    return _get_cache_dir() / f"{video_id}_{'_'.join(languages)}.json"
+
+
+def _load_cache(video_id: str, languages: list[str]) -> dict | None:
+    """Return cached entry or None on miss, expiry, or corruption."""
+    path = _cache_path(video_id, languages)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cached_at = date.fromisoformat(data["cached_at"])
+        if (date.today() - cached_at).days > CACHE_TTL_DAYS:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _save_cache(video_id: str, languages: list[str], transcript_info: dict) -> None:
+    """Persist transcript_info to a JSON cache file. Failures are non-fatal."""
+    try:
+        cache_dir = _get_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "entries": transcript_info["entries"],
+            "language": transcript_info["language"],
+            "source": transcript_info["source"],
+            "cached_at": date.today().isoformat(),
+            "ttl_days": CACHE_TTL_DAYS,
+        }
+        _cache_path(video_id, languages).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+# ── MCP tools ─────────────────────────────────────────────────────────────────
 
 
 @mcp.tool(
@@ -212,7 +279,8 @@ async def youtube_get_transcript(
 
     Returns the video's transcript as Markdown with YAML frontmatter containing
     metadata (title, author, URL). Tries human-created subtitles first, then
-    falls back to auto-generated captions.
+    falls back to auto-generated captions. Uses a local cache (stdio mode) to
+    avoid re-fetching transcripts for previously seen videos.
 
     Useful for: summarizing videos, fact-checking claims, extracting key points,
     translating content, creating notes from lectures/talks.
@@ -220,7 +288,8 @@ async def youtube_get_transcript(
     Args:
         url: YouTube video URL or video ID. Accepts youtube.com/watch?v=...,
             youtu.be/..., youtube.com/shorts/..., or a bare 11-char video ID.
-        languages: Preferred languages in priority order. Defaults to ["ja", "en", "ko"].
+        languages: Preferred languages in priority order.
+            Defaults to ["ja", "en", "ko"].
         include_timestamps: Include [MM:SS] timestamps for each line of the transcript.
         include_metadata: Include video metadata (title, author, etc.) in the output.
 
@@ -231,16 +300,31 @@ async def youtube_get_transcript(
     video_id = _extract_video_id(url)
     langs = languages or DEFAULT_LANGUAGES
 
-    try:
-        transcript_info = _get_transcript(video_id, langs)
-    except Exception as e:
-        return (
-            f"Error: Could not retrieve transcript for video {video_id}.\n{e}\n\n"
-            "Possible causes:\n"
-            "  - The video has no captions/subtitles\n"
-            "  - The video is private or age-restricted\n"
-            "  - The requested languages are not available"
-        )
+    # Check cache before fetching from YouTube
+    cached_entry = _load_cache(video_id, langs)
+
+    if cached_entry is not None:
+        transcript_info = {
+            "entries": cached_entry["entries"],
+            "language": cached_entry["language"],
+            "source": cached_entry["source"],
+        }
+        was_cached = True
+        cached_at = cached_entry["cached_at"]
+    else:
+        try:
+            transcript_info = _get_transcript(video_id, langs)
+        except Exception as e:
+            return (
+                f"Error: Could not retrieve transcript for video {video_id}.\n{e}\n\n"
+                "Possible causes:\n"
+                "  - The video has no captions/subtitles\n"
+                "  - The video is private or age-restricted\n"
+                "  - The requested languages are not available"
+            )
+        _save_cache(video_id, langs, transcript_info)
+        was_cached = False
+        cached_at = ""
 
     transcript_text = _format_transcript(transcript_info["entries"], include_timestamps)
 
@@ -248,12 +332,49 @@ async def youtube_get_transcript(
     if include_metadata:
         metadata = _get_metadata(video_id)
 
-    return _build_output(metadata, transcript_text, transcript_info, video_id)
+    return _build_output(
+        metadata,
+        transcript_text,
+        transcript_info,
+        video_id,
+        cached=was_cached,
+        cached_at=cached_at,
+    )
+
+
+@mcp.tool(
+    name="youtube_get_video_info",
+    annotations=ToolAnnotations(
+        title="Get YouTube Video Info",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def youtube_get_video_info(url: str) -> str:
+    """Fetch metadata for a YouTube video without downloading the transcript.
+
+    Returns video information as a JSON string. Useful for checking video
+    credibility (upload date, view count, channel), reading the full description
+    for links and resources, or getting a quick overview before deciding whether
+    to fetch the full transcript.
+
+    Args:
+        url: YouTube video URL or video ID. Accepts youtube.com/watch?v=...,
+            youtu.be/..., youtube.com/shorts/..., or a bare 11-char video ID.
+
+    Returns:
+        str: JSON string with fields: video_id, title, author, channel_url,
+            upload_date, duration_seconds, description (full text), view_count
+    """
+    url = url.strip().strip("<>")
+    video_id = _extract_video_id(url)
+    metadata = _get_metadata(video_id, full_description=True)
+    return json.dumps(metadata, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
-    import os
-
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
 
     if transport == "streamable-http":

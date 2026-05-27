@@ -19,3 +19,31 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "poethepoet>=0.42.1",
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.6",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]  # pycodestyle + pyflakes + isort
+
+# pyproject.toml
+[tool.poe.tasks]
+format   = "uv run ruff format ."
+lint     = "uv run ruff check --fix ."
+type-check = "uv run mypy ."
+
+# pre-commit用まとめタスク
+check    = ["format", "lint", "type-check"]
+
+# hook用に分離
+check-fast = ["format", "lint"]   # PostToolUse から呼ぶ
+check-type = ["type-check"]       # Stop から呼ぶ
