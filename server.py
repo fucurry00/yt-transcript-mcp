@@ -15,6 +15,7 @@ from mcp.types import ToolAnnotations
 
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
+MIN_TRANSCRIPT_CHARS = 10_000
 CACHE_TTL_DAYS = 180
 VIDEO_ID_RE = re.compile(r"[a-zA-Z0-9_-]{11}")
 
@@ -226,9 +227,102 @@ def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
     return "\n".join(lines)
 
 
+def _format_seconds(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _validate_transcript_options(
+    start_seconds: float | None,
+    end_seconds: float | None,
+    max_chars: int,
+) -> str | None:
+    if max_chars < MIN_TRANSCRIPT_CHARS or max_chars > MAX_TRANSCRIPT_CHARS:
+        return (
+            "Error: max_chars must be between "
+            f"{MIN_TRANSCRIPT_CHARS} and {MAX_TRANSCRIPT_CHARS}."
+        )
+
+    if start_seconds is not None and start_seconds < 0:
+        return "Error: start_seconds must be greater than or equal to 0."
+    if end_seconds is not None and end_seconds < 0:
+        return "Error: end_seconds must be greater than or equal to 0."
+    if (
+        start_seconds is not None
+        and end_seconds is not None
+        and start_seconds >= end_seconds
+    ):
+        return "Error: start_seconds must be less than end_seconds."
+
+    return None
+
+
+def _entry_overlaps_range(
+    entry: dict,
+    start_seconds: float | None,
+    end_seconds: float | None,
+) -> bool:
+    entry_start = float(entry["start"])
+    entry_end = entry_start + float(entry.get("duration", 0))
+
+    if start_seconds is not None and entry_end <= start_seconds:
+        return False
+    if end_seconds is not None and entry_start >= end_seconds:
+        return False
+    return True
+
+
+def _filter_entries_by_range(
+    entries: list[dict],
+    start_seconds: float | None,
+    end_seconds: float | None,
+) -> list[dict]:
+    if start_seconds is None and end_seconds is None:
+        return entries
+    return [
+        entry
+        for entry in entries
+        if _entry_overlaps_range(entry, start_seconds, end_seconds)
+    ]
+
+
 def _markdown_metadata_value(value: object) -> str:
     """Return a single-line value for Markdown metadata bullets."""
     return " ".join(str(value).splitlines()).strip()
+
+
+def _format_transcript_range(
+    start_seconds: float | None,
+    end_seconds: float | None,
+) -> str | None:
+    if start_seconds is None and end_seconds is None:
+        return None
+    start = "0" if start_seconds is None else _format_seconds(start_seconds)
+    end = "end" if end_seconds is None else _format_seconds(end_seconds)
+    return f"{start}s-{end}s"
+
+
+def _build_continuation_section(
+    video_id: str,
+    next_start_seconds: float,
+    max_chars: int,
+    end_seconds: float | None,
+) -> str:
+    next_start = _format_seconds(next_start_seconds)
+    call_parts = [
+        f'url="https://www.youtube.com/watch?v={video_id}"',
+        f"start_seconds={next_start}",
+    ]
+    if end_seconds is not None:
+        call_parts.append(f"end_seconds={_format_seconds(end_seconds)}")
+    call_parts.append(f"max_chars={max_chars}")
+
+    return (
+        "\n## Continuation\n\n"
+        "- Transcript truncated: true\n"
+        f"- next_start_seconds: {next_start}\n"
+        f"- max_chars: {max_chars}\n"
+        f"- Suggested next call: youtube_get_transcript({', '.join(call_parts)})\n"
+    )
 
 
 def _build_output(
@@ -239,6 +333,9 @@ def _build_output(
     *,
     cached: bool = False,
     cached_at: str = "",
+    transcript_range: str | None = None,
+    continuation_section: str = "",
+    max_chars: int | None = None,
 ) -> str:
     """Build the final Markdown output."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -257,6 +354,8 @@ def _build_output(
             f"{_markdown_metadata_value(transcript_info.get('source', 'unknown'))}"
         ),
     ]
+    if transcript_range is not None:
+        metadata_lines.append(f"- Transcript range: {transcript_range}")
 
     if metadata.get("upload_date"):
         d = metadata["upload_date"]
@@ -283,13 +382,113 @@ def _build_output(
 
 {transcript_text}
 """
-    if len(output) > MAX_TRANSCRIPT_CHARS:
-        output = (
-            output[:MAX_TRANSCRIPT_CHARS]
-            + "\n\n[... transcript truncated due to length ...]"
+
+    return output + continuation_section
+
+
+def _build_limited_output(
+    metadata: dict,
+    entries: list[dict],
+    transcript_info: dict,
+    video_id: str,
+    *,
+    include_timestamps: bool,
+    cached: bool = False,
+    cached_at: str = "",
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    max_chars: int = MAX_TRANSCRIPT_CHARS,
+) -> str:
+    """Build Markdown output without splitting transcript entries."""
+    transcript_range = _format_transcript_range(start_seconds, end_seconds)
+    display_entries = [entry for entry in entries if entry["text"].strip()]
+
+    if not display_entries:
+        transcript_text = "No transcript entries found for the requested range."
+        return _build_output(
+            metadata,
+            transcript_text,
+            transcript_info,
+            video_id,
+            cached=cached,
+            cached_at=cached_at,
+            transcript_range=transcript_range,
+            max_chars=max_chars,
         )
 
-    return output
+    full_text = _format_transcript(display_entries, include_timestamps)
+    full_output = _build_output(
+        metadata,
+        full_text,
+        transcript_info,
+        video_id,
+        cached=cached,
+        cached_at=cached_at,
+        transcript_range=transcript_range,
+        max_chars=max_chars,
+    )
+    if len(full_output) <= max_chars:
+        return full_output
+
+    kept_entries: list[dict] = []
+    for index, entry in enumerate(display_entries):
+        candidate_entries = kept_entries + [entry]
+        next_entry = (
+            display_entries[index + 1] if index + 1 < len(display_entries) else None
+        )
+        continuation = ""
+        if next_entry is not None:
+            continuation = _build_continuation_section(
+                video_id,
+                float(next_entry["start"]),
+                max_chars,
+                end_seconds,
+            )
+        candidate_output = _build_output(
+            metadata,
+            _format_transcript(candidate_entries, include_timestamps),
+            transcript_info,
+            video_id,
+            cached=cached,
+            cached_at=cached_at,
+            transcript_range=transcript_range,
+            continuation_section=continuation,
+            max_chars=max_chars,
+        )
+        if len(candidate_output) > max_chars:
+            break
+        kept_entries = candidate_entries
+
+    next_index = len(kept_entries)
+    if next_index >= len(display_entries):
+        return _build_output(
+            metadata,
+            _format_transcript(kept_entries, include_timestamps),
+            transcript_info,
+            video_id,
+            cached=cached,
+            cached_at=cached_at,
+            transcript_range=transcript_range,
+            max_chars=max_chars,
+        )
+
+    continuation = _build_continuation_section(
+        video_id,
+        float(display_entries[next_index]["start"]),
+        max_chars,
+        end_seconds,
+    )
+    return _build_output(
+        metadata,
+        _format_transcript(kept_entries, include_timestamps),
+        transcript_info,
+        video_id,
+        cached=cached,
+        cached_at=cached_at,
+        transcript_range=transcript_range,
+        continuation_section=continuation,
+        max_chars=max_chars,
+    )
 
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────
@@ -358,6 +557,9 @@ async def youtube_get_transcript(
     languages: Optional[list[str]] = None,
     include_timestamps: bool = False,
     include_metadata: bool = True,
+    start_seconds: Optional[float] = None,
+    end_seconds: Optional[float] = None,
+    max_chars: int = MAX_TRANSCRIPT_CHARS,
 ) -> str:
     """Fetch the transcript (subtitles) of a YouTube video.
 
@@ -376,6 +578,9 @@ async def youtube_get_transcript(
             Defaults to ["ja", "en", "ko"].
         include_timestamps: Include [MM:SS] timestamps for each line of the transcript.
         include_metadata: Include video metadata (title, author, etc.) in the output.
+        start_seconds: Start of the transcript range, in seconds.
+        end_seconds: End of the transcript range, in seconds.
+        max_chars: Maximum final Markdown output size. Must be 10,000 to 200,000.
 
     Returns:
         str: Markdown-formatted transcript
@@ -383,6 +588,13 @@ async def youtube_get_transcript(
     url = url.strip().strip("<>")
     video_id = _extract_video_id(url)
     langs = languages or DEFAULT_LANGUAGES
+    options_error = _validate_transcript_options(
+        start_seconds,
+        end_seconds,
+        max_chars,
+    )
+    if options_error is not None:
+        return options_error
 
     # Check cache before fetching from YouTube
     cached_entry = _load_cache(video_id, langs)
@@ -410,19 +622,27 @@ async def youtube_get_transcript(
         was_cached = False
         cached_at = ""
 
-    transcript_text = _format_transcript(transcript_info["entries"], include_timestamps)
+    selected_entries = _filter_entries_by_range(
+        transcript_info["entries"],
+        start_seconds,
+        end_seconds,
+    )
 
     metadata = {"title": "Unknown", "author": "Unknown", "video_id": video_id}
     if include_metadata:
         metadata = _get_metadata(video_id)
 
-    return _build_output(
+    return _build_limited_output(
         metadata,
-        transcript_text,
+        selected_entries,
         transcript_info,
         video_id,
+        include_timestamps=include_timestamps,
         cached=was_cached,
         cached_at=cached_at,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        max_chars=max_chars,
     )
 
 
