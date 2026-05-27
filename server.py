@@ -151,6 +151,11 @@ def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
     return "\n".join(lines)
 
 
+def _markdown_metadata_value(value: object) -> str:
+    """Return a single-line value for Markdown metadata bullets."""
+    return " ".join(str(value).splitlines()).strip()
+
+
 def _build_output(
     metadata: dict,
     transcript_text: str,
@@ -160,40 +165,44 @@ def _build_output(
     cached: bool = False,
     cached_at: str = "",
 ) -> str:
-    """Build the final Markdown output with YAML frontmatter."""
+    """Build the final Markdown output."""
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    frontmatter_fields = [
-        f'title: "{metadata.get("title", "Unknown")}"',
-        f'author: "{metadata.get("author", "Unknown")}"',
-        f"url: {url}",
-        f"video_id: {video_id}",
-        f"transcript_language: {transcript_info.get('language', 'unknown')}",
-        f"transcript_source: {transcript_info.get('source', 'unknown')}",
+    title = _markdown_metadata_value(metadata.get("title", "Unknown")) or "Unknown"
+    metadata_lines = [
+        f"- Author: {_markdown_metadata_value(metadata.get('author', 'Unknown'))}",
+        f"- URL: {url}",
+        f"- Video ID: {video_id}",
+        (
+            "- Transcript language: "
+            f"{_markdown_metadata_value(transcript_info.get('language', 'unknown'))}"
+        ),
+        (
+            "- Transcript source: "
+            f"{_markdown_metadata_value(transcript_info.get('source', 'unknown'))}"
+        ),
     ]
 
     if metadata.get("upload_date"):
         d = metadata["upload_date"]
-        frontmatter_fields.append(
-            f"upload_date: {d[:4]}-{d[4:6]}-{d[6:]}"
-            if len(d) == 8
-            else f"upload_date: {d}"
-        )
+        upload_date = f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else d
+        metadata_lines.append(f"- Upload date: {_markdown_metadata_value(upload_date)}")
     if metadata.get("duration_seconds"):
         m, s = divmod(int(metadata["duration_seconds"]), 60)
-        frontmatter_fields.append(f"duration: {m}m{s}s")
+        metadata_lines.append(f"- Duration: {m}m{s}s")
 
     if cached:
-        frontmatter_fields.append("cached: true")
-        frontmatter_fields.append(f"cached_at: {cached_at}")
-
-    frontmatter = "---\n" + "\n".join(frontmatter_fields) + "\n---"
+        metadata_lines.append("- Cached: true")
+        metadata_lines.append(f"- Cached at: {_markdown_metadata_value(cached_at)}")
 
     description_section = ""
     if metadata.get("description"):
         description_section = f"\n## Description\n\n{metadata['description']}\n"
 
-    output = f"""{frontmatter}
+    metadata_section = "\n".join(metadata_lines)
+    output = f"""# {title}
+
+{metadata_section}
 {description_section}
 ## Transcript
 
@@ -277,10 +286,10 @@ async def youtube_get_transcript(
 ) -> str:
     """Fetch the transcript (subtitles) of a YouTube video.
 
-    Returns the video's transcript as Markdown with YAML frontmatter containing
-    metadata (title, author, URL). Tries human-created subtitles first, then
-    falls back to auto-generated captions. Uses a local cache (stdio mode) to
-    avoid re-fetching transcripts for previously seen videos.
+    Returns the video's transcript as Markdown with metadata rendered as normal
+    Markdown content. Tries human-created subtitles first, then falls back to
+    auto-generated captions. Uses a local cache (stdio mode) to avoid re-fetching
+    transcripts for previously seen videos.
 
     Useful for: summarizing videos, fact-checking claims, extracting key points,
     translating content, creating notes from lectures/talks.
@@ -294,7 +303,7 @@ async def youtube_get_transcript(
         include_metadata: Include video metadata (title, author, etc.) in the output.
 
     Returns:
-        str: Markdown-formatted transcript with YAML frontmatter
+        str: Markdown-formatted transcript
     """
     url = url.strip().strip("<>")
     video_id = _extract_video_id(url)
