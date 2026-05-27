@@ -8,6 +8,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -15,23 +16,48 @@ from mcp.types import ToolAnnotations
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
 CACHE_TTL_DAYS = 180
+VIDEO_ID_RE = re.compile(r"[a-zA-Z0-9_-]{11}")
 
 mcp = FastMCP("yt-transcript-mcp")
+
+
+def _validate_video_id(candidate: str, original: str) -> str:
+    if VIDEO_ID_RE.fullmatch(candidate):
+        return candidate
+
+    raise ValueError(
+        f"Could not extract a YouTube video ID from: {original!r}. "
+        "Please provide a valid YouTube URL or 11-character video ID."
+    )
 
 
 def _extract_video_id(url_or_id: str) -> str:
     """Extract video ID from various YouTube URL formats or a bare ID."""
     url_or_id = url_or_id.strip()
 
-    match = re.search(
-        r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})",
-        url_or_id,
-    )
-    if match:
-        return match.group(1)
-
-    if re.fullmatch(r"[a-zA-Z0-9_-]{11}", url_or_id):
+    if VIDEO_ID_RE.fullmatch(url_or_id):
         return url_or_id
+
+    parsed = urlparse(url_or_id)
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    path_parts = [part for part in parsed.path.split("/") if part]
+
+    if host == "youtu.be" and path_parts:
+        return _validate_video_id(path_parts[0], url_or_id)
+
+    is_youtube_host = host == "youtube.com" or host.endswith(".youtube.com")
+    if is_youtube_host:
+        if parsed.path == "/watch":
+            query = parse_qs(parsed.query)
+            if query.get("v"):
+                return _validate_video_id(query["v"][0], url_or_id)
+        if len(path_parts) >= 2 and path_parts[0] in {
+            "embed",
+            "live",
+            "shorts",
+            "v",
+        }:
+            return _validate_video_id(path_parts[1], url_or_id)
 
     raise ValueError(
         f"Could not extract a YouTube video ID from: {url_or_id!r}. "
@@ -100,12 +126,27 @@ def _get_transcript(video_id: str, languages: list[str]) -> dict:
     }
 
 
+def _metadata_error_response(video_id: str, metadata_error: dict) -> dict:
+    return {
+        "title": "Unknown",
+        "author": "Unknown",
+        "video_id": video_id,
+        "metadata_error": metadata_error,
+    }
+
+
 def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
     """Fetch video metadata using yt-dlp --dump-json."""
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     if not shutil.which("yt-dlp"):
-        return {"title": "Unknown", "author": "Unknown", "video_id": video_id}
+        return _metadata_error_response(
+            video_id,
+            {
+                "type": "yt_dlp_not_found",
+                "message": "yt-dlp executable was not found on PATH",
+            },
+        )
 
     try:
         result = subprocess.run(
@@ -114,25 +155,59 @@ def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
             text=True,
             timeout=15,
         )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            description = data.get("description", "") or ""
-            if not full_description:
-                description = description[:500]
-            return {
-                "title": data.get("title", "Unknown"),
-                "author": data.get("uploader", data.get("channel", "Unknown")),
-                "channel_url": data.get("channel_url", ""),
-                "upload_date": data.get("upload_date", ""),
-                "duration_seconds": data.get("duration"),
-                "description": description,
-                "view_count": data.get("view_count"),
-                "video_id": video_id,
-            }
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired as e:
+        return _metadata_error_response(
+            video_id,
+            {
+                "type": "yt_dlp_timeout",
+                "message": str(e),
+                "timeout_seconds": e.timeout,
+            },
+        )
+    except Exception as e:
+        return _metadata_error_response(
+            video_id,
+            {
+                "type": "yt_dlp_exception",
+                "message": str(e),
+            },
+        )
 
-    return {"title": "Unknown", "author": "Unknown", "video_id": video_id}
+    if result.returncode != 0:
+        return _metadata_error_response(
+            video_id,
+            {
+                "type": "yt_dlp_failed",
+                "returncode": result.returncode,
+                "stderr": (result.stderr or "")[-2000:],
+            },
+        )
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        return _metadata_error_response(
+            video_id,
+            {
+                "type": "yt_dlp_invalid_json",
+                "message": str(e),
+                "stdout": (result.stdout or "")[-2000:],
+            },
+        )
+
+    description = data.get("description", "") or ""
+    if not full_description:
+        description = description[:500]
+    return {
+        "title": data.get("title", "Unknown"),
+        "author": data.get("uploader", data.get("channel", "Unknown")),
+        "channel_url": data.get("channel_url", ""),
+        "upload_date": data.get("upload_date", ""),
+        "duration_seconds": data.get("duration"),
+        "description": description,
+        "view_count": data.get("view_count"),
+        "video_id": video_id,
+    }
 
 
 def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
