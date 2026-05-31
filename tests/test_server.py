@@ -1,3 +1,4 @@
+import inspect
 import json
 import subprocess
 import tempfile
@@ -70,44 +71,6 @@ class TranscriptFormattingTests(unittest.TestCase):
             "[00:05] intro\n[01:05] chapter",
         )
 
-    def test_filters_entries_by_open_time_ranges(self):
-        entries = [
-            {"text": "zero", "start": 0.0, "duration": 10.0},
-            {"text": "ten", "start": 10.0, "duration": 5.0},
-            {"text": "fifteen", "start": 15.0, "duration": 5.0},
-            {"text": "twenty", "start": 20.0, "duration": 5.0},
-        ]
-
-        self.assertEqual(
-            [
-                entry["text"]
-                for entry in server._filter_entries_by_range(entries, 5, 10)
-            ],
-            ["zero"],
-        )
-        self.assertEqual(
-            [
-                entry["text"]
-                for entry in server._filter_entries_by_range(entries, 10, 15)
-            ],
-            ["ten"],
-        )
-        self.assertEqual(
-            [
-                entry["text"]
-                for entry in server._filter_entries_by_range(entries, 12, None)
-            ],
-            ["ten", "fifteen", "twenty"],
-        )
-        self.assertEqual(
-            [
-                entry["text"]
-                for entry in server._filter_entries_by_range(entries, None, 10)
-            ],
-            ["zero"],
-        )
-
-
 class OutputFormattingTests(unittest.TestCase):
     def test_build_output_uses_markdown_metadata_without_frontmatter(self):
         metadata = {
@@ -159,15 +122,15 @@ class OutputFormattingTests(unittest.TestCase):
         self.assertLessEqual(len(output), 400)
         self.assertIn("short line", output)
         self.assertNotIn("x" * 80, output)
-        self.assertIn("## Continuation", output)
-        self.assertIn("- next_start_seconds: 1", output)
+        self.assertIn("打ち切りました", output)
+        self.assertNotIn("## Continuation", output)
 
-    def test_build_limited_output_keeps_end_seconds_in_continuation(self):
+    def test_build_limited_output_returns_full_text_when_within_limit(self):
         metadata = {"title": "Title", "author": "Author"}
         transcript_info = {"language": "en", "source": "manual"}
         entries = [
-            {"text": "short line", "start": 10.0, "duration": 1.0},
-            {"text": "x" * 400, "start": 11.0, "duration": 1.0},
+            {"text": "first line", "start": 0.0, "duration": 1.0},
+            {"text": "second line", "start": 1.0, "duration": 1.0},
         ]
 
         output = server._build_limited_output(
@@ -176,28 +139,85 @@ class OutputFormattingTests(unittest.TestCase):
             transcript_info,
             "dQw4w9WgXcQ",
             include_timestamps=False,
-            start_seconds=10.0,
-            end_seconds=20.0,
-            max_chars=500,
         )
 
-        self.assertIn("- Transcript range: 10s-20s", output)
-        self.assertIn("end_seconds=20", output)
-        self.assertIn("max_chars=500", output)
+        self.assertIn("first line\nsecond line", output)
+        self.assertNotIn("打ち切りました", output)
 
-    def test_build_limited_output_reports_empty_range(self):
+    def test_build_limited_output_reports_empty_entries(self):
         output = server._build_limited_output(
             {"title": "Title", "author": "Author"},
             [],
             {"language": "en", "source": "manual"},
             "dQw4w9WgXcQ",
             include_timestamps=False,
-            start_seconds=30.0,
-            end_seconds=40.0,
         )
 
-        self.assertIn("- Transcript range: 30s-40s", output)
-        self.assertIn("No transcript entries found for the requested range.", output)
+        self.assertIn("No transcript entries found.", output)
+
+    def test_build_limited_output_respects_limit_when_first_entry_too_large(self):
+        metadata = {"title": "Title", "author": "Author"}
+        transcript_info = {"language": "en", "source": "manual"}
+        entries = [
+            {"text": "y" * 1000, "start": 0.0, "duration": 1.0},
+            {"text": "later line", "start": 1.0, "duration": 1.0},
+        ]
+
+        output = server._build_limited_output(
+            metadata,
+            entries,
+            transcript_info,
+            "dQw4w9WgXcQ",
+            include_timestamps=False,
+            max_chars=300,
+        )
+
+        # Nothing fits in the budget: kept_lines stays empty (the loop breaks on
+        # the oversized first entry, so "later line" is never reached), the upper
+        # bound still holds, and the truncation note is present.
+        self.assertLessEqual(len(output), 300)
+        self.assertNotIn("y" * 80, output)
+        self.assertNotIn("later line", output)
+        self.assertIn("打ち切りました", output)
+
+    def test_build_limited_output_respects_limit_with_timestamps(self):
+        metadata = {"title": "Title", "author": "Author"}
+        transcript_info = {"language": "en", "source": "manual"}
+        entries = [
+            {"text": f"line {i}", "start": float(i), "duration": 1.0}
+            for i in range(200)
+        ]
+
+        output = server._build_limited_output(
+            metadata,
+            entries,
+            transcript_info,
+            "dQw4w9WgXcQ",
+            include_timestamps=True,
+            max_chars=500,
+        )
+
+        self.assertLessEqual(len(output), 500)
+        self.assertIn("打ち切りました", output)
+        self.assertIn("[00:00] line 0", output)
+
+    def test_build_limited_output_clamps_even_when_header_exceeds_budget(self):
+        # Degenerate case: metadata alone is larger than max_chars. The output
+        # must still be clamped to the limit.
+        metadata = {"title": "T", "author": "A", "description": "d" * 5000}
+        transcript_info = {"language": "en", "source": "manual"}
+        entries = [{"text": "body line", "start": 0.0, "duration": 1.0}]
+
+        output = server._build_limited_output(
+            metadata,
+            entries,
+            transcript_info,
+            "dQw4w9WgXcQ",
+            include_timestamps=False,
+            max_chars=300,
+        )
+
+        self.assertLessEqual(len(output), 300)
 
 
 class CacheTests(unittest.TestCase):
@@ -353,16 +373,12 @@ class MetadataTests(unittest.TestCase):
 
 
 class ToolTests(unittest.IsolatedAsyncioTestCase):
-    @staticmethod
-    def cached_entries(entries):
-        return {
-            "entries": entries,
-            "language": "en",
-            "source": "manual",
-            "cached_at": "2026-05-27",
-        }
+    def test_youtube_get_transcript_exposes_only_url_and_timestamps(self):
+        params = inspect.signature(server.youtube_get_transcript).parameters
+        self.assertEqual(list(params), ["url", "include_timestamps"])
+        self.assertIs(params["include_timestamps"].default, False)
 
-    async def test_youtube_get_transcript_uses_cache_without_fetching_transcript(self):
+    async def test_youtube_get_transcript_uses_cache_and_always_fetches_metadata(self):
         cached = {
             "entries": [{"text": "cached transcript", "start": 0.0, "duration": 1.0}],
             "language": "en",
@@ -377,51 +393,14 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
                 server,
                 "_get_metadata",
                 return_value={"title": "Title", "author": "Author"},
-            ),
+            ) as get_metadata,
         ):
             output = await server.youtube_get_transcript("dQw4w9WgXcQ")
 
         get_transcript.assert_not_called()
+        get_metadata.assert_called_once_with("dQw4w9WgXcQ")
         self.assertIn("- Cached: true", output)
         self.assertIn("cached transcript", output)
-
-    async def test_youtube_get_transcript_filters_cached_entries_by_range(self):
-        cached = self.cached_entries(
-            [
-                {"text": "before", "start": 0.0, "duration": 10.0},
-                {"text": "inside", "start": 10.0, "duration": 5.0},
-                {"text": "overlap", "start": 18.0, "duration": 5.0},
-                {"text": "after", "start": 20.0, "duration": 5.0},
-            ]
-        )
-
-        with patch.object(server, "_load_cache", return_value=cached):
-            output = await server.youtube_get_transcript(
-                "dQw4w9WgXcQ",
-                include_metadata=False,
-                start_seconds=10.0,
-                end_seconds=20.0,
-            )
-
-        self.assertIn("- Transcript range: 10s-20s", output)
-        self.assertNotIn("before", output)
-        self.assertIn("inside", output)
-        self.assertIn("overlap", output)
-        self.assertNotIn("after", output)
-
-    async def test_youtube_get_transcript_rejects_invalid_range(self):
-        output = await server.youtube_get_transcript(
-            "dQw4w9WgXcQ",
-            start_seconds=20.0,
-            end_seconds=10.0,
-        )
-
-        self.assertIn("Error: start_seconds must be less than end_seconds.", output)
-
-    async def test_youtube_get_transcript_rejects_out_of_bounds_max_chars(self):
-        output = await server.youtube_get_transcript("dQw4w9WgXcQ", max_chars=9_999)
-
-        self.assertIn("Error: max_chars must be between 10000 and 200000.", output)
 
     async def test_youtube_get_transcript_returns_readable_error_on_fetch_failure(self):
         with (
