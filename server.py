@@ -436,10 +436,11 @@ def _save_cache(video_id: str, languages: list[str], transcript_info: dict) -> N
 
 @mcp.tool(
     name="youtube_get_transcript",
+    # Keep this short: it is copied into the client's context on tool discovery.
+    # Details belong in the README, not here.
     description=(
-        "Return a YouTube transcript as Markdown, including video metadata. "
-        "Set include_timestamps=true to prefix each line with [MM:SS]. "
-        "Very long transcripts are truncated to the first ~200,000 characters."
+        "Return a YouTube transcript as Markdown with video metadata. "
+        "include_timestamps=true prefixes each line with [MM:SS]."
     ),
     annotations=ToolAnnotations(
         title="Get YouTube Transcript",
