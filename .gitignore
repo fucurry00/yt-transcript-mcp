@@ -12,5 +12,9 @@ wheels/
 # Runtime cache
 .transcript_cache/
 
+# Local tool state
+.omc/
+.config/
+
 # OS files
 .DS_Store
