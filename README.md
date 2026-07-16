@@ -188,6 +188,12 @@ uv run poe check
 | `uv run poe type-check` | mypy を実行 |
 | `uv run poe check` | format / lint / type-check をまとめて実行 |
 
+### ツール description は短く保つ
+
+MCP クライアントはツール発見時に `description` と引数スキーマをそのまま会話コンテキストへ流し込みます。
+説明が長いほど有効コンテキストを圧迫するため、`@mcp.tool(description=...)` には「何を返すか」と「引数の意味」だけを書き、
+仕様の詳細（出力例、打ち切り、フォールバック順など）はこの README 側に置いてください。
+
 ## 今後の拡張案
 
 - [ ] 字幕がない動画向けの Whisper 連携
