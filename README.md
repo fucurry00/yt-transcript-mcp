@@ -13,7 +13,7 @@ Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート
 - 字幕言語は `ja` / `en` / `ko` を優先（自動選択）、タイムスタンプ付与は任意指定
 - Markdown 形式で字幕を出力
 - `yt-dlp` が使える場合はタイトル、投稿者、投稿日なども取得
-- ローカルキャッシュ、stdio、Streamable HTTP に対応
+- ローカルキャッシュに対応（stdio 接続）
 
 ## 提供ツール
 
@@ -151,31 +151,6 @@ MCP クライアントで YouTube URL を含む依頼をします。
 ```bash
 CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 ```
-
-## Streamable HTTP で起動する
-
-stdio がデフォルトです。Web クライアントやリモート環境から接続したい場合は、Streamable HTTP で起動します。
-
-```bash
-MCP_TRANSPORT=streamable-http API_KEY=your-secret PORT=8000 uv run python server.py
-```
-
-| 環境変数 | デフォルト | 説明 |
-| --- | --- | --- |
-| `MCP_TRANSPORT` | `stdio` | `streamable-http` を指定すると HTTP サーバーとして起動 |
-| `API_KEY` | 未設定 | 設定すると Bearer token 認証を有効化 |
-| `PORT` | `8000` | HTTP サーバーのポート |
-| `CACHE_DIR` | `.transcript_cache` | キャッシュ保存先 |
-
-認証を有効にした場合:
-
-```bash
-curl -H "Authorization: Bearer your-secret" http://localhost:8000/mcp
-```
-
-> [!NOTE]
-> リモート公開する場合は HTTPS 終端と認証を必ず用意してください。
-> SSE transport は MCP 仕様更新により非推奨のため、このサーバーでは Streamable HTTP を使います。
 
 ## トラブルシューティング
 
