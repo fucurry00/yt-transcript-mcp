@@ -523,33 +523,4 @@ async def youtube_get_video_info(url: str) -> str:
 
 
 if __name__ == "__main__":
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
-
-    if transport == "streamable-http":
-        import uvicorn
-        from starlette.middleware.base import BaseHTTPMiddleware
-        from starlette.requests import Request
-        from starlette.responses import JSONResponse
-
-        app = mcp.streamable_http_app()
-
-        api_key = os.environ.get("API_KEY")
-        if api_key:
-
-            class _BearerAuthMiddleware(BaseHTTPMiddleware):
-                async def dispatch(self, request: Request, call_next):
-                    auth = request.headers.get("Authorization", "")
-                    if not auth.startswith("Bearer ") or auth[7:] != api_key:
-                        return JSONResponse(
-                            {"error": "unauthorized"},
-                            status_code=401,
-                            headers={"WWW-Authenticate": "Bearer"},
-                        )
-                    return await call_next(request)
-
-            app.add_middleware(_BearerAuthMiddleware)
-
-        port = int(os.environ.get("PORT", "8000"))
-        uvicorn.run(app, host="localhost", port=port)
-    else:
-        mcp.run()  # stdio (default)
+    mcp.run()  # stdio
