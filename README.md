@@ -12,7 +12,7 @@ Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート
 - 手動字幕を優先し、なければ自動生成字幕にフォールバック
 - 字幕言語は `ja` / `en` / `ko` を優先（自動選択）、タイムスタンプ付与は任意指定
 - Markdown 形式で字幕を出力
-- `yt-dlp` が使える場合はタイトル、投稿者、投稿日なども取得
+- タイトル、投稿者、投稿日などのメタデータも取得
 - ローカルキャッシュに対応（stdio 接続）
 
 ## 提供ツール
@@ -33,14 +33,17 @@ Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート
 
 ```bash
 cd yt-transcript-mcp
-uv sync --extra ytdlp
-```
-
-`yt-dlp` はメタデータ取得用です。字幕だけ取得できればよい場合は、次の最小構成でも動きます。
-
-```bash
 uv sync
 ```
+
+これだけで `yt-dlp` を含む依存が揃います。システムに `yt-dlp` を別途インストールする必要はありません（`uv run` 配下では venv 内の `yt-dlp` が PATH 上のものより優先されます）。
+
+> [!IMPORTANT]
+> `yt-dlp` は YouTube 側の仕様変更に追従し続けることで動いているツールです。`uv.lock` に固定したまま放置するといずれメタデータ取得が壊れます。壊れたら（あるいは定期的に）次を実行してください。
+>
+> ```bash
+> uv run poe update-ytdlp
+> ```
 
 ## クライアント設定
 
@@ -162,9 +165,9 @@ CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 
 ### メタデータが `Unknown` になる
 
-- `yt-dlp` がインストールされていない可能性があります
-- `uv sync --extra ytdlp` を実行してください
 - `youtube_get_video_info` の JSON に `metadata_error` がある場合は、`type` と `stderr` を確認してください
+- `type` が `yt_dlp_not_found` なら依存が入っていません。`uv sync` を実行してください
+- それ以外（`yt_dlp_failed` など）で `stderr` が YouTube の仕様変更を示している場合は、`yt-dlp` が古い可能性があります。`uv run poe update-ytdlp` で更新してください
 - YouTube 側の制限や一時的な取得失敗でも `Unknown` になることがあります
 
 ### 出力が長すぎる
@@ -175,7 +178,7 @@ CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 ## 開発
 
 ```bash
-uv sync --extra ytdlp --dev
+uv sync --dev
 uv run python -m unittest discover -s tests
 uv run poe check
 ```
@@ -187,6 +190,17 @@ uv run poe check
 | `uv run poe lint` | Ruff の lint を `--fix` 付きで実行 |
 | `uv run poe type-check` | mypy を実行 |
 | `uv run poe check` | format / lint / type-check をまとめて実行 |
+| `uv run poe update-ytdlp` | `yt-dlp` を最新に更新して lock を書き換える |
+
+### 依存の方針
+
+**すべて uv に一本化し、システムへの別途インストールを前提にしない。** 他者の環境へ移したときに「私の環境では動く」を起こさないための方針です。
+
+- **`youtube-transcript-api`** — 純粋な Python 依存。`uv.lock` で固定。
+- **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`poe update-ytdlp`）。ここだけは「固定＝安全」が成り立ちません。
+- **`ffmpeg`** — 現時点で未使用。#9（フレーム取得）で必要になったら [`imageio-ffmpeg`](https://pypi.org/project/imageio-ffmpeg/) を依存に追加します。静的バイナリを同梱しており、brew / nix なしで uv 管理下に置けることを確認済みです。ffmpeg 単体のみで `ffprobe` は付かない点に注意。
+
+Nix flake は現状不要です（#10）。依存のうち 2 つは既に uv が再現性を担保しており、1 つは未使用のため、導入しても実質何も解決しません。加えて Nix の本質であるシステム依存の凍結は、上記のとおり `yt-dlp` とは相性が悪く逆効果です。
 
 ### ツール description は短く保つ
 
