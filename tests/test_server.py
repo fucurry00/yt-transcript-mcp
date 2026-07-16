@@ -71,6 +71,7 @@ class TranscriptFormattingTests(unittest.TestCase):
             "[00:05] intro\n[01:05] chapter",
         )
 
+
 class OutputFormattingTests(unittest.TestCase):
     def test_build_output_uses_markdown_metadata_without_frontmatter(self):
         metadata = {

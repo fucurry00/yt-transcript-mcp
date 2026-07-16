@@ -224,9 +224,7 @@ def _format_line(entry: dict, include_timestamps: bool) -> str:
 def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
     """Format transcript entries into readable text, skipping blank entries."""
     return "\n".join(
-        _format_line(e, include_timestamps)
-        for e in entries
-        if e["text"].strip()
+        _format_line(e, include_timestamps) for e in entries if e["text"].strip()
     )
 
 
