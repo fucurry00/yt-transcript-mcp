@@ -4,7 +4,7 @@
 > このプロジェクトは初学者によりバイブコーディングされています。
 
 YouTube の URL または動画 ID から、字幕・メタデータを取得する MCP サーバーです。
-Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート化、内容確認に使えます。
+Claude Desktop / OpenAI Codex などから、動画の要約、翻訳、ノート化、内容確認に使えます。
 
 ## 主な機能
 
@@ -20,7 +20,7 @@ Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート
 | ツール | 用途 |
 | --- | --- |
 | `youtube_get_transcript` | 字幕を取得し、Markdown 形式で返す |
-| `youtube_get_video_info` | 字幕を取得せず、動画メタデータだけを JSON で返す |
+| `youtube_get_video_info` | 動画メタデータのみを JSON で返す |
 | `youtube_get_frame` | 指定時刻のフレームを 1 枚、画像で返す |
 
 ## セットアップ
@@ -43,7 +43,7 @@ uv sync
 > `yt-dlp` は YouTube 側の仕様変更に追従し続けることで動いているツールです。`uv.lock` に固定したまま放置するといずれメタデータ取得が壊れます。壊れたら（あるいは定期的に）次を実行してください。
 >
 > ```bash
-> uv run poe update-ytdlp
+> uv lock --upgrade-package yt-dlp && uv sync
 > ```
 
 ## クライアント設定
@@ -69,18 +69,14 @@ uv sync
 }
 ```
 
-### Claude Code
+### OpenAI Codex
 
-プロジェクト単位で追加する場合:
+`~/.codex/config.toml` に追加します。
 
-```bash
-claude mcp add youtube -- uv run --directory /path/to/yt-transcript-mcp python server.py
-```
-
-ユーザー全体に追加する場合:
-
-```bash
-claude mcp add --scope user youtube -- uv run --directory /path/to/yt-transcript-mcp python server.py
+```toml
+[mcp_servers.yt-transcript-mcp]
+command = "uv"
+args = ["run", "--directory", "/path/to/yt-transcript-mcp", "python", "server.py"]
 ```
 
 ## 使い方
@@ -99,6 +95,8 @@ MCP クライアントで YouTube URL を含む依頼をします。
 | `include_timestamps` | `false` | `true` にすると各行に `[MM:SS]` を付ける |
 
 字幕言語は `ja` / `en` / `ko` の順で自動選択し、見つからない場合は利用可能な字幕にフォールバックします。メタデータ（タイトル・投稿者など）は常に付与されます。
+
+タイムスタンプは、インライン出力ではデフォルト OFF（`include_timestamps=true` で ON）ですが、書き出される `.md` ファイルは常に `[MM:SS]` 付きです。
 
 出力例:
 
@@ -121,10 +119,7 @@ MCP クライアントで YouTube URL を含む依頼をします。
 
 `Transcript file` はタイムスタンプ付き全文（`[MM:SS] テキスト`）を書き出した `.md` の絶対パスです。stdio 接続でクライアントとサーバーが同一マシンにいる前提で、続きの確認・特定語の検索・区間の抜き出しは、このファイルに対してクライアント側の `Read` / `Grep` を使えば専用ツールなしで完結します（`Grep` の結果に `[MM:SS]` が含まれるので、そのまま `youtube_get_frame` の `timestamp` に渡せます）。
 
-非常に長い動画（文字起こしが約 200,000 文字を超える場合）は、先頭約 200,000 文字までで打ち切られ、末尾に注記が付きます。全文は上記 `.md` にあるので、続きはそのファイルを `Read` してください。
-
-> [!NOTE]
-> 区間指定の専用ツール（例: `youtube_get_transcript_segment`）は、ファイルシステムを持たないクライアント（Web クライアント等）を再サポートする場合にのみ検討します。stdio + ローカル `Read`/`Grep` で足りる現状では未実装です。
+非常に長い動画（文字起こしが約 200,000 文字を超える場合）は、先頭約 200,000 文字までで打ち切られ、末尾に注記が付きます。全文は上記 `.md` にあるので、続きはそのファイルを `Read` させます。
 
 ### `youtube_get_frame`
 
@@ -148,7 +143,7 @@ MCP クライアントで YouTube URL を含む依頼をします。
 アセットとしてコピー・埋め込み・参照もできます。
 
 > [!NOTE]
-> 画像はクライアント UI 上では折りたたまれて表示されますが、モデルには渡っています。
+> 画像はクライアント UI 上では折りたたまれて表示さることがありますが、モデルには渡っています。
 
 ### `youtube_get_video_info`
 
@@ -198,7 +193,7 @@ CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 
 - `youtube_get_video_info` の JSON に `metadata_error` がある場合は、`type` と `stderr` を確認してください
 - `type` が `yt_dlp_not_found` なら依存が入っていません。`uv sync` を実行してください
-- それ以外（`yt_dlp_failed` など）で `stderr` が YouTube の仕様変更を示している場合は、`yt-dlp` が古い可能性があります。`uv run poe update-ytdlp` で更新してください
+- それ以外（`yt_dlp_failed` など）で `stderr` が YouTube の仕様変更を示している場合は、`yt-dlp` が古い可能性があります。`uv lock --upgrade-package yt-dlp && uv sync` で更新してください
 - YouTube 側の制限や一時的な取得失敗でも `Unknown` になることがあります
 
 ### 出力が長すぎる
@@ -211,27 +206,24 @@ CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 ```bash
 uv sync --dev
 uv run python -m unittest discover -s tests
-uv run poe check
+uv run ruff format . && uv run ruff check --fix . && uv run mypy .
 ```
 
 | コマンド | 内容 |
 | --- | --- |
 | `uv run python -m unittest discover -s tests` | テストを実行 |
-| `uv run poe format` | Ruff でフォーマット |
-| `uv run poe lint` | Ruff の lint を `--fix` 付きで実行 |
-| `uv run poe type-check` | mypy を実行 |
-| `uv run poe check` | format / lint / type-check をまとめて実行 |
-| `uv run poe update-ytdlp` | `yt-dlp` を最新に更新して lock を書き換える |
+| `uv run ruff format .` | Ruff でフォーマット |
+| `uv run ruff check --fix .` | Ruff の lint を `--fix` 付きで実行 |
+| `uv run mypy .` | mypy を実行 |
+| `uv lock --upgrade-package yt-dlp && uv sync` | `yt-dlp` を最新に更新して lock を書き換える |
 
 ### 依存の方針
 
 **すべて uv に一本化し、システムへの別途インストールを前提にしない。** 他者の環境へ移したときに「私の環境では動く」を起こさないための方針です。
 
 - **`youtube-transcript-api`** — 純粋な Python 依存。`uv.lock` で固定。
-- **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`poe update-ytdlp`）。ここだけは「固定＝安全」が成り立ちません。
-- **`imageio-ffmpeg`** — `youtube_get_frame` のフレーム抽出に使用。静的バイナリを同梱しており、brew / nix なしで uv 管理下に置けます。ffmpeg 単体のみで `ffprobe` は付きませんが、フレーム抽出は ffmpeg だけで完結するため問題ありません。
-
-Nix flake は現状不要です（#10）。依存のうち 2 つは既に uv が再現性を担保しており、1 つは未使用のため、導入しても実質何も解決しません。加えて Nix の本質であるシステム依存の凍結は、上記のとおり `yt-dlp` とは相性が悪く逆効果です。
+- **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`uv lock --upgrade-package yt-dlp && uv sync`）。ここだけは「固定＝安全」が成り立ちません。
+- **`imageio-ffmpeg`** — `youtube_get_frame` のフレーム抽出に使用。静的バイナリを同梱しており、brew なしで uv 管理下に置けます。ffmpeg 単体のみで `ffprobe` は付きませんが、フレーム抽出は ffmpeg だけで完結するため問題ありません。
 
 ### ツール description は短く保つ
 
