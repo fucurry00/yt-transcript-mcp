@@ -16,5 +16,8 @@ wheels/
 .omc/
 .config/
 
+# Local experiments (tool demos, generated articles, scratch data)
+experiments/
+
 # OS files
 .DS_Store
