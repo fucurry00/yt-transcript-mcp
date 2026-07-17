@@ -8,8 +8,9 @@ dependencies = [
     "youtube-transcript-api>=1.0.0",
     "pydantic>=2.0.0",
     # Required, not optional: metadata is fetched on every transcript call.
-    # yt-dlp breaks as YouTube changes, so refresh it with `uv run poe update-ytdlp`
-    # rather than letting uv.lock pin an old version indefinitely.
+    # yt-dlp breaks as YouTube changes, so refresh it with
+    # `uv lock --upgrade-package yt-dlp && uv sync` rather than letting uv.lock
+    # pin an old version indefinitely.
     "yt-dlp>=2024.0.0",
     # Ships a static ffmpeg binary, so frame extraction needs no brew/nix install.
     "imageio-ffmpeg>=0.5.0",
@@ -25,7 +26,6 @@ packages = ["."]
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
-    "poethepoet>=0.42.1",
     "pre-commit>=4.5.1",
     "ruff>=0.15.6",
 ]
@@ -36,20 +36,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]  # pycodestyle + pyflakes + isort
-
-# pyproject.toml
-[tool.poe.tasks]
-format   = "uv run ruff format ."
-lint     = "uv run ruff check --fix ."
-type-check = "uv run mypy ."
-
-# pre-commit用まとめタスク
-check    = ["format", "lint", "type-check"]
-
-# hook用に分離
-check-fast = ["format", "lint"]   # PostToolUse から呼ぶ
-check-type = ["type-check"]       # Stop から呼ぶ
-
-# yt-dlp は YouTube の変更に追従し続けるから動く。lock に固定したまま放置すると
-# いずれ動画取得が壊れるので、定期的に叩いて lock を更新する
-update-ytdlp = { shell = "uv lock --upgrade-package yt-dlp && uv sync" }
