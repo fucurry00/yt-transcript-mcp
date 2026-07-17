@@ -21,6 +21,7 @@ Claude Desktop / Claude Code などから、動画の要約、翻訳、ノート
 | --- | --- |
 | `youtube_get_transcript` | 字幕を取得し、Markdown 形式で返す |
 | `youtube_get_video_info` | 字幕を取得せず、動画メタデータだけを JSON で返す |
+| `youtube_get_frame` | 指定時刻のフレームを 1 枚、画像で返す |
 
 ## セットアップ
 
@@ -122,6 +123,26 @@ MCP クライアントで YouTube URL を含む依頼をします。
 > [!NOTE]
 > 長尺動画の任意区間や続きを取得する必要が出た場合は、区間指定の専用ツール（例: `youtube_get_transcript_segment(url, start_seconds)`）の追加を検討します。現時点では未実装です。
 
+### `youtube_get_frame`
+
+字幕だけでは分からない場面（スライド、画面上のコード、図表、字幕なしのデモ）で使います。
+
+| パラメータ | デフォルト | 説明 |
+| --- | --- | --- |
+| `url` | 必須 | YouTube URL または 11 文字の動画 ID |
+| `timestamp` | 必須 | 秒（`90`）、`MM:SS`（`01:30`）、`HH:MM:SS`（`00:01:30`） |
+
+`youtube_get_transcript` に `include_timestamps=true` を渡すと各行に `[MM:SS]` が付くので、
+その値をそのまま `timestamp` に渡せます。
+
+動画はダウンロードしません。`yt-dlp` でストリーム URL を解決し、`ffmpeg` が HTTP range で
+必要な範囲だけ読んで 1 フレームを JPEG で返します。116 分の動画の任意の地点でも数秒、
+ディスクには何も残りません。解像度は 720p 上限です（360p では画面上のコードが判読できず、
+720p なら本用途には十分なため）。
+
+> [!NOTE]
+> 画像はクライアント UI 上では折りたたまれて表示されますが、モデルには渡っています。
+
 ### `youtube_get_video_info`
 
 動画の概要だけ確認したい場合に使います。
@@ -198,7 +219,7 @@ uv run poe check
 
 - **`youtube-transcript-api`** — 純粋な Python 依存。`uv.lock` で固定。
 - **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`poe update-ytdlp`）。ここだけは「固定＝安全」が成り立ちません。
-- **`ffmpeg`** — 現時点で未使用。#9（フレーム取得）で必要になったら [`imageio-ffmpeg`](https://pypi.org/project/imageio-ffmpeg/) を依存に追加します。静的バイナリを同梱しており、brew / nix なしで uv 管理下に置けることを確認済みです。ffmpeg 単体のみで `ffprobe` は付かない点に注意。
+- **`imageio-ffmpeg`** — `youtube_get_frame` のフレーム抽出に使用。静的バイナリを同梱しており、brew / nix なしで uv 管理下に置けます。ffmpeg 単体のみで `ffprobe` は付きませんが、フレーム抽出は ffmpeg だけで完結するため問題ありません。
 
 Nix flake は現状不要です（#10）。依存のうち 2 つは既に uv が再現性を担保しており、1 つは未使用のため、導入しても実質何も解決しません。加えて Nix の本質であるシステム依存の凍結は、上記のとおり `yt-dlp` とは相性が悪く逆効果です。
 
@@ -213,4 +234,3 @@ MCP クライアントはツール発見時に `description` と引数スキー�
 - [ ] 字幕がない動画向けの Whisper 連携
 - [ ] プレイリスト URL の一括処理
 - [ ] キャッシュの明示的な削除・更新オプション
-- [ ] スライドや表などを扱うためのフレーム取得
