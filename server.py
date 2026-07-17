@@ -246,11 +246,16 @@ def _markdown_metadata_value(value: object) -> str:
     return " ".join(str(value).splitlines()).strip()
 
 
-def _truncation_note(max_chars: int) -> str:
+def _truncation_note(max_chars: int, transcript_file: str = "") -> str:
     """Note appended when the transcript is truncated to fit max_chars."""
+    tail = (
+        f" 全文は {transcript_file} にあります（Read / Grep で続きを参照可）。"
+        if transcript_file
+        else ""
+    )
     return (
         f"\n\n*※ 文字起こしが長いため先頭約{max_chars:,}文字で打ち切りました。"
-        "このツールは先頭部分のみ返します。*\n"
+        f"このツールは先頭部分のみ返します。{tail}*\n"
     )
 
 
@@ -262,6 +267,7 @@ def _build_output(
     *,
     cached: bool = False,
     cached_at: str = "",
+    transcript_file: str = "",
 ) -> str:
     """Build the final Markdown output."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -288,6 +294,9 @@ def _build_output(
     if metadata.get("duration_seconds"):
         m, s = divmod(int(metadata["duration_seconds"]), 60)
         metadata_lines.append(f"- Duration: {m}m{s}s")
+
+    if transcript_file:
+        metadata_lines.append(f"- Transcript file: {transcript_file}")
 
     if cached:
         metadata_lines.append("- Cached: true")
@@ -327,6 +336,7 @@ def _build_limited_output(
     include_timestamps: bool,
     cached: bool = False,
     cached_at: str = "",
+    transcript_file: str = "",
     max_chars: int = MAX_TRANSCRIPT_CHARS,
 ) -> str:
     """Build Markdown output, truncating on entry boundaries if too long."""
@@ -340,6 +350,7 @@ def _build_limited_output(
             video_id,
             cached=cached,
             cached_at=cached_at,
+            transcript_file=transcript_file,
         )
 
     full_output = _build_output(
@@ -349,13 +360,14 @@ def _build_limited_output(
         video_id,
         cached=cached,
         cached_at=cached_at,
+        transcript_file=transcript_file,
     )
     if len(full_output) <= max_chars:
         return full_output
 
     # Too long: keep whole entries from the start until the budget runs out.
     # The character budget reserves room for the header and the truncation note.
-    note = _truncation_note(max_chars)
+    note = _truncation_note(max_chars, transcript_file)
     header_size = len(
         _build_output(
             metadata,
@@ -364,6 +376,7 @@ def _build_limited_output(
             video_id,
             cached=cached,
             cached_at=cached_at,
+            transcript_file=transcript_file,
         )
     )
     budget = max(0, max_chars - header_size - len(note))
@@ -386,6 +399,7 @@ def _build_limited_output(
             video_id,
             cached=cached,
             cached_at=cached_at,
+            transcript_file=transcript_file,
         )
         + note
     )
@@ -423,6 +437,30 @@ def _load_cache(video_id: str, languages: list[str]) -> dict | None:
         return data
     except Exception:
         return None
+
+
+def _write_transcript_md(video_id: str, entries: list[dict]) -> str:
+    """Write the timestamped transcript to a .md file the agent can Read/Grep.
+
+    Returns the absolute path, or "" if writing failed (non-fatal: the inline
+    transcript is still returned either way).
+    """
+    try:
+        cache_dir = _get_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path = cache_dir / f"{video_id}.md"
+        path.write_text(
+            _format_transcript(entries, include_timestamps=True), encoding="utf-8"
+        )
+        return str(path.resolve())
+    except Exception:
+        return ""
+
+
+def _frame_path(video_id: str, timestamp: str) -> Path:
+    # ":" and "." are legal in filenames but noisy; flatten them.
+    safe_ts = timestamp.replace(":", "-").replace(".", "-")
+    return _get_cache_dir() / f"{video_id}_frame_{safe_ts}.jpg"
 
 
 def _save_cache(video_id: str, languages: list[str], transcript_info: dict) -> None:
@@ -573,6 +611,7 @@ async def youtube_get_transcript(
         cached_at = ""
 
     metadata = _get_metadata(video_id)
+    transcript_file = _write_transcript_md(video_id, transcript_info["entries"])
 
     return _build_limited_output(
         metadata,
@@ -582,6 +621,7 @@ async def youtube_get_transcript(
         include_timestamps=include_timestamps,
         cached=was_cached,
         cached_at=cached_at,
+        transcript_file=transcript_file,
     )
 
 
@@ -626,7 +666,7 @@ async def youtube_get_video_info(url: str) -> str:
     # Image | str return that keeps errors as text like the other tools.
     structured_output=False,
 )
-async def youtube_get_frame(url: str, timestamp: str) -> Image | str:
+async def youtube_get_frame(url: str, timestamp: str) -> list | str:
     """Return a single JPEG frame from a YouTube video at the given timestamp."""
     url = url.strip().strip("<>")
     try:
@@ -644,9 +684,19 @@ async def youtube_get_frame(url: str, timestamp: str) -> Image | str:
         )
 
     try:
-        return Image(
-            data=_extract_frame(_stream_url(video_id), timestamp), format="jpeg"
-        )
+        path = _frame_path(video_id, timestamp)
+        if path.exists():
+            data = path.read_bytes()
+        else:
+            # Cache miss: resolving the stream + decoding is the expensive part,
+            # so persist the JPEG for reuse as an asset and on repeat requests.
+            data = _extract_frame(_stream_url(video_id), timestamp)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            except Exception:
+                pass
+        return [Image(data=data, format="jpeg"), f"Frame saved to: {path}"]
     except subprocess.TimeoutExpired:
         return f"Timed out fetching a frame for video {video_id}."
     except Exception as e:

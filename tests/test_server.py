@@ -437,6 +437,17 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FrameTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Per-test cache dir so a frame written by one test cannot be served
+        # from disk by another (which would skip the mocked _extract_frame).
+        self._tmp = tempfile.TemporaryDirectory()
+        patcher = patch.object(
+            server, "_get_cache_dir", return_value=Path(self._tmp.name)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self._tmp.cleanup)
+
     async def test_accepts_seconds_and_clock_timestamps(self):
         with (
             patch.object(server, "_stream_url", return_value="https://example/v.mp4"),
@@ -447,9 +458,25 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             for value in ("90", "01:30", "00:01:30", "20:14.5"):
                 with self.subTest(value=value):
                     result = await server.youtube_get_frame("dQw4w9WgXcQ", value)
-                    self.assertIsInstance(result, server.Image)
-                    self.assertEqual(result.data, b"jpegbytes")
+                    image, note = result
+                    self.assertIsInstance(image, server.Image)
+                    self.assertEqual(image.data, b"jpegbytes")
+                    self.assertIn("Frame saved to:", note)
                     self.assertEqual(extract.call_args.args[1], value)
+
+    async def test_serves_repeat_request_from_disk_without_reextracting(self):
+        with (
+            patch.object(server, "_stream_url", return_value="https://example/v.mp4"),
+            patch.object(
+                server, "_extract_frame", return_value=b"jpegbytes"
+            ) as extract,
+        ):
+            await server.youtube_get_frame("dQw4w9WgXcQ", "90")
+            result = await server.youtube_get_frame("dQw4w9WgXcQ", "90")
+
+        image, _ = result
+        self.assertEqual(image.data, b"jpegbytes")
+        self.assertEqual(extract.call_count, 1)  # second call hit the disk cache
 
     async def test_rejects_timestamp_that_ffmpeg_would_read_as_an_option(self):
         with patch.object(server, "_extract_frame") as extract:
@@ -468,6 +495,20 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(result, str)
         self.assertIn("boom", result)
+
+
+class TranscriptFileTests(unittest.TestCase):
+    def test_write_transcript_md_writes_timestamped_lines(self):
+        entries = [
+            {"text": "hello", "start": 0.0, "duration": 1.0},
+            {"text": "", "start": 1.0, "duration": 1.0},
+            {"text": "world", "start": 90.0, "duration": 1.0},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(server, "_get_cache_dir", return_value=Path(tmp)):
+                path = server._write_transcript_md("vid00000001", entries)
+            text = Path(path).read_text(encoding="utf-8")
+        self.assertEqual(text, "[00:00] hello\n[01:30] world")
 
 
 if __name__ == "__main__":
