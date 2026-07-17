@@ -9,13 +9,26 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
 
 DEFAULT_LANGUAGES = ["ja", "en", "ko"]
 MAX_TRANSCRIPT_CHARS = 200_000  # safety limit to avoid blowing up context
 CACHE_TTL_DAYS = 180
 VIDEO_ID_RE = re.compile(r"[a-zA-Z0-9_-]{11}")
+
+# Seconds ("1234"), or MM:SS / HH:MM:SS, with optional fractional part.
+TIMESTAMP_RE = re.compile(r"\d+(:\d{1,2}){0,2}(\.\d+)?")
+# Video-only: frames need no audio, and it is smaller than 360p+audio.
+# Capped at 720p, which resolves on-screen code where 360p does not.
+# avc1 first: it decodes ~25% faster than the av01 of the same resolution.
+# protocol^=http on every tier keeps yt-dlp off HLS, whose m3u8 manifest
+# ffmpeg cannot open here. Each tier has been checked to decode.
+FRAME_FORMAT = (
+    "bv*[height<=720][vcodec^=avc1][protocol^=http]"
+    "/bv*[height<=720][protocol^=http]"
+    "/b[height<=720][protocol^=http]"
+)
 
 mcp = FastMCP("yt-transcript-mcp")
 
@@ -431,6 +444,77 @@ def _save_cache(video_id: str, languages: list[str], transcript_info: dict) -> N
         pass
 
 
+# ── Frame extraction ──────────────────────────────────────────────────────────
+
+
+def _stream_url(video_id: str) -> str:
+    """Resolve a direct video stream URL via yt-dlp.
+
+    The URL carries an `expire` param (hours), so it cannot be cached.
+    """
+    result = subprocess.run(
+        [
+            "yt-dlp",
+            "-f",
+            FRAME_FORMAT,
+            "-g",
+            "--no-warnings",
+            f"https://www.youtube.com/watch?v={video_id}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"yt-dlp could not resolve a stream URL: {result.stderr[-500:]}"
+        )
+
+    url = result.stdout.strip().splitlines()
+    if not url:
+        raise RuntimeError("yt-dlp returned no stream URL.")
+    return url[0]
+
+
+def _extract_frame(stream_url: str, timestamp: str) -> bytes:
+    """Grab one JPEG frame at timestamp. ffmpeg range-reads only what it needs."""
+    import imageio_ffmpeg  # type: ignore[import-untyped]
+
+    result = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-nostdin",
+            "-loglevel",
+            "error",
+            # -ss before -i seeks on the input, so ffmpeg fetches only the bytes
+            # around the timestamp instead of streaming the whole video.
+            "-ss",
+            timestamp,
+            "-i",
+            stream_url,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ],
+        capture_output=True,
+        timeout=120,
+    )
+    if result.returncode != 0 or not result.stdout:
+        # The signed stream URL is ~1000 chars and ffmpeg echoes it back on
+        # failure, so drop it first or it crowds out the actual error.
+        stderr = result.stderr.decode("utf-8", "replace").replace(
+            stream_url, "<stream>"
+        )
+        raise RuntimeError(f"ffmpeg could not extract a frame: {stderr.strip()[-500:]}")
+    return result.stdout
+
+
 # ── MCP tools ─────────────────────────────────────────────────────────────────
 
 
@@ -521,6 +605,55 @@ async def youtube_get_video_info(url: str) -> str:
         return str(e)
     metadata = _get_metadata(video_id, full_description=True)
     return json.dumps(metadata, ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="youtube_get_frame",
+    # Keep this short: it is copied into the client's context on tool discovery.
+    description=(
+        "Return one video frame at a timestamp as an image. "
+        "timestamp accepts seconds or MM:SS / HH:MM:SS. "
+        "Use when the transcript alone is not enough (slides, code, charts)."
+    ),
+    annotations=ToolAnnotations(
+        title="Get YouTube Frame",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+    # Image has no pydantic schema, so an output schema cannot be built for the
+    # Image | str return that keeps errors as text like the other tools.
+    structured_output=False,
+)
+async def youtube_get_frame(url: str, timestamp: str) -> Image | str:
+    """Return a single JPEG frame from a YouTube video at the given timestamp."""
+    url = url.strip().strip("<>")
+    try:
+        video_id = _extract_video_id(url)
+    except ValueError as e:
+        return str(e)
+
+    timestamp = timestamp.strip()
+    # Validated, not just parsed: an unchecked value starting with "-" would be
+    # read by ffmpeg as an option rather than a timestamp.
+    if not TIMESTAMP_RE.fullmatch(timestamp):
+        return (
+            f"Invalid timestamp: {timestamp!r}. "
+            "Use seconds (90), MM:SS (01:30), or HH:MM:SS (00:01:30)."
+        )
+
+    try:
+        return Image(
+            data=_extract_frame(_stream_url(video_id), timestamp), format="jpeg"
+        )
+    except subprocess.TimeoutExpired:
+        return f"Timed out fetching a frame for video {video_id}."
+    except Exception as e:
+        return (
+            f"Error: Could not extract a frame for video {video_id} "
+            f"at {timestamp}.\n{e}"
+        )
 
 
 if __name__ == "__main__":

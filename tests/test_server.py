@@ -436,5 +436,39 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["metadata_error"]["type"], "yt_dlp_failed")
 
 
+class FrameTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepts_seconds_and_clock_timestamps(self):
+        with (
+            patch.object(server, "_stream_url", return_value="https://example/v.mp4"),
+            patch.object(
+                server, "_extract_frame", return_value=b"jpegbytes"
+            ) as extract,
+        ):
+            for value in ("90", "01:30", "00:01:30", "20:14.5"):
+                with self.subTest(value=value):
+                    result = await server.youtube_get_frame("dQw4w9WgXcQ", value)
+                    self.assertIsInstance(result, server.Image)
+                    self.assertEqual(result.data, b"jpegbytes")
+                    self.assertEqual(extract.call_args.args[1], value)
+
+    async def test_rejects_timestamp_that_ffmpeg_would_read_as_an_option(self):
+        with patch.object(server, "_extract_frame") as extract:
+            result = await server.youtube_get_frame("dQw4w9WgXcQ", "-i")
+
+        self.assertIsInstance(result, str)
+        self.assertIn("Invalid timestamp", result)
+        extract.assert_not_called()
+
+    async def test_reports_extraction_failure_as_text(self):
+        with (
+            patch.object(server, "_stream_url", return_value="https://example/v.mp4"),
+            patch.object(server, "_extract_frame", side_effect=RuntimeError("boom")),
+        ):
+            result = await server.youtube_get_frame("dQw4w9WgXcQ", "90")
+
+        self.assertIsInstance(result, str)
+        self.assertIn("boom", result)
+
+
 if __name__ == "__main__":
     unittest.main()
