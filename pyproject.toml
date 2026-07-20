@@ -2,6 +2,8 @@
 name = "youtube-transcript-mcp"
 version = "0.1.0"
 description = "MCP server for extracting YouTube video transcripts"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",
