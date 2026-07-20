@@ -653,7 +653,8 @@ async def youtube_get_video_info(url: str) -> str:
     description=(
         "Return one video frame at a timestamp as an image. "
         "timestamp accepts seconds or MM:SS / HH:MM:SS. "
-        "Use when the transcript alone is not enough (slides, code, charts)."
+        "Slides/code/charts aren't in the transcript: grab a frame when it "
+        "references on-screen content, or when asked to capture what's shown."
     ),
     annotations=ToolAnnotations(
         title="Get YouTube Frame",
