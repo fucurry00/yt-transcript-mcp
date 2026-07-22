@@ -696,12 +696,15 @@ async def youtube_get_frame(url: str, timestamp: str) -> list | str:
     except ValueError as e:
         return str(e)
 
-    timestamp = timestamp.strip()
+    # Accept "[MM:SS]" verbatim: that is how timestamps appear in the transcript
+    # and chapter output, so agents copy them across brackets and all.
+    given = timestamp
+    timestamp = timestamp.strip().strip("[]").strip()
     # Validated, not just parsed: an unchecked value starting with "-" would be
     # read by ffmpeg as an option rather than a timestamp.
     if not TIMESTAMP_RE.fullmatch(timestamp):
         return (
-            f"Invalid timestamp: {timestamp!r}. "
+            f"Invalid timestamp: {given!r}. "
             "Use seconds (90), MM:SS (01:30), or HH:MM:SS (00:01:30)."
         )
 

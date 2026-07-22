@@ -529,12 +529,27 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extract.call_count, 1)  # second call hit the disk cache
 
     async def test_rejects_timestamp_that_ffmpeg_would_read_as_an_option(self):
-        with patch.object(server, "_extract_frame") as extract:
-            result = await server.youtube_get_frame("dQw4w9WgXcQ", "-i")
+        # "[-i]" guards the bracket-stripping path specifically: stripping must
+        # not smuggle an ffmpeg option past the validation that follows it.
+        for hostile in ("-i", "[-i]", "[01:07] -y"):
+            with self.subTest(timestamp=hostile):
+                with patch.object(server, "_extract_frame") as extract:
+                    result = await server.youtube_get_frame("dQw4w9WgXcQ", hostile)
 
-        self.assertIsInstance(result, str)
-        self.assertIn("Invalid timestamp", result)
-        extract.assert_not_called()
+                self.assertIsInstance(result, str)
+                self.assertIn("Invalid timestamp", result)
+                extract.assert_not_called()
+
+    async def test_accepts_bracketed_timestamp_copied_from_transcript_output(self):
+        with (
+            patch.object(server, "_stream_url", return_value="https://example/v.mp4"),
+            patch.object(
+                server, "_extract_frame", return_value=b"jpegbytes"
+            ) as extract,
+        ):
+            await server.youtube_get_frame("dQw4w9WgXcQ", "[01:07]")
+
+        extract.assert_called_once_with("https://example/v.mp4", "01:07")
 
     async def test_reports_extraction_failure_as_text(self):
         with (
