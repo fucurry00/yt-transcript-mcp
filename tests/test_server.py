@@ -348,7 +348,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(metadata["video_id"], "dQw4w9WgXcQ")
         self.assertEqual(metadata["metadata_error"]["type"], "yt_dlp_not_found")
 
-    def test_get_metadata_uses_ytdlp_json_and_truncates_description_by_default(self):
+    def test_get_metadata_uses_ytdlp_json_and_keeps_the_whole_description(self):
         completed = self.completed(
             stdout=json.dumps(
                 {
@@ -358,7 +358,9 @@ class MetadataTests(unittest.TestCase):
                     "channel_url": "https://youtube.com/@channel",
                     "upload_date": "20240501",
                     "duration": 123,
-                    "description": "x" * 600,
+                    # Longer than the 500-char cut this used to be subject to,
+                    # and longer than YouTube's own 5000-char description limit.
+                    "description": "x" * 6000,
                     "chapters": [{"start_time": 0, "title": "Intro"}],
                     "view_count": 42,
                 }
@@ -376,7 +378,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(metadata["channel_url"], "https://youtube.com/@channel")
         self.assertEqual(metadata["upload_date"], "20240501")
         self.assertEqual(metadata["duration_seconds"], 123)
-        self.assertEqual(len(metadata["description"]), 500)
+        self.assertEqual(len(metadata["description"]), 6000)
         self.assertEqual(metadata["chapters"], [{"start_time": 0, "title": "Intro"}])
         self.assertEqual(metadata["view_count"], 42)
         self.assertEqual(metadata["video_id"], "dQw4w9WgXcQ")

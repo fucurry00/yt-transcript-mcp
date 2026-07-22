@@ -147,7 +147,7 @@ def _metadata_error_response(video_id: str, metadata_error: dict) -> dict:
     }
 
 
-def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
+def _get_metadata(video_id: str) -> dict:
     """Fetch video metadata using yt-dlp --dump-json."""
     url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -207,16 +207,13 @@ def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
             },
         )
 
-    description = data.get("description", "") or ""
-    if not full_description:
-        description = description[:500]
     return {
         "title": data.get("title", "Unknown"),
         "author": data.get("uploader") or data.get("channel") or "Unknown",
         "channel_url": data.get("channel_url", ""),
         "upload_date": data.get("upload_date", ""),
         "duration_seconds": data.get("duration"),
-        "description": description,
+        "description": data.get("description", "") or "",
         # Capped like description: chapters are the only header section sized by
         # the video, and an oversized header would crowd out the transcript.
         "chapters": (data.get("chapters") or [])[:200],
@@ -664,7 +661,7 @@ async def youtube_get_video_info(url: str) -> str:
         video_id = _extract_video_id(url)
     except ValueError as e:
         return str(e)
-    metadata = _get_metadata(video_id, full_description=True)
+    metadata = _get_metadata(video_id)
     return json.dumps(metadata, ensure_ascii=False, indent=2)
 
 
