@@ -102,6 +102,54 @@ class OutputFormattingTests(unittest.TestCase):
         self.assertIn("## Description\n\nShort description", output)
         self.assertIn("## Transcript\n\nTranscript body", output)
 
+    def test_build_output_lists_chapters_when_present(self):
+        metadata = {
+            "title": "Title",
+            "author": "Author",
+            "chapters": [
+                {"start_time": 0, "end_time": 67, "title": "Introduction"},
+                {"start_time": 67, "end_time": 162, "title": "Series\npreview"},
+                {"start_time": 3725, "end_time": 3800, "title": "Wrap up"},
+            ],
+        }
+
+        output = server._build_output(
+            metadata, "Transcript body", {"language": "en"}, "dQw4w9WgXcQ"
+        )
+
+        self.assertIn(
+            "## Chapters\n\n"
+            "- [00:00] Introduction\n"
+            "- [01:07] Series preview\n"
+            "- [01:02:05] Wrap up\n",
+            output,
+        )
+        self.assertLess(output.index("## Chapters"), output.index("## Transcript"))
+
+    def test_build_output_drops_chapters_it_cannot_read(self):
+        metadata = {
+            "title": "Title",
+            "author": "Author",
+            "chapters": [{"start_time": "not a number", "title": "Broken"}],
+        }
+
+        output = server._build_output(
+            metadata, "Transcript body", {"language": "en"}, "dQw4w9WgXcQ"
+        )
+
+        self.assertNotIn("## Chapters", output)
+        self.assertIn("## Transcript\n\nTranscript body", output)
+
+    def test_build_output_omits_chapters_section_when_absent(self):
+        output = server._build_output(
+            {"title": "Title", "author": "Author", "chapters": []},
+            "Transcript body",
+            {"language": "en"},
+            "dQw4w9WgXcQ",
+        )
+
+        self.assertNotIn("## Chapters", output)
+
     def test_build_limited_output_truncates_on_entry_boundary(self):
         metadata = {"title": "Title", "author": "Author"}
         transcript_info = {"language": "en", "source": "manual"}
@@ -311,6 +359,7 @@ class MetadataTests(unittest.TestCase):
                     "upload_date": "20240501",
                     "duration": 123,
                     "description": "x" * 600,
+                    "chapters": [{"start_time": 0, "title": "Intro"}],
                     "view_count": 42,
                 }
             ),
@@ -328,6 +377,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(metadata["upload_date"], "20240501")
         self.assertEqual(metadata["duration_seconds"], 123)
         self.assertEqual(len(metadata["description"]), 500)
+        self.assertEqual(metadata["chapters"], [{"start_time": 0, "title": "Intro"}])
         self.assertEqual(metadata["view_count"], 42)
         self.assertEqual(metadata["video_id"], "dQw4w9WgXcQ")
 

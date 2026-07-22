@@ -112,10 +112,17 @@ MCP クライアントで YouTube URL を含む依頼をします。
 - Duration: 12m30s
 - Transcript file: /abs/path/.transcript_cache/xxxxx.md
 
+## Chapters
+
+- [00:00] イントロ
+- [01:07] 本編
+
 ## Transcript
 
 こんにちは、今日は...
 ```
+
+`## Chapters` は動画にチャプターが設定されているときだけ出ます。
 
 `Transcript file` はタイムスタンプ付き全文（`[MM:SS] テキスト`）を書き出した `.md` の絶対パスです。stdio 接続でクライアントとサーバーが同一マシンにいる前提で、続きの確認・特定語の検索・区間の抜き出しは、このファイルに対してクライアント側の `Read` / `Grep` を使えば専用ツールなしで完結します（`Grep` の結果に `[MM:SS]` が含まれるので、そのまま `youtube_get_frame` の `timestamp` に渡せます）。
 
@@ -158,9 +165,13 @@ MCP クライアントで YouTube URL を含む依頼をします。
   "upload_date": "20250115",
   "duration_seconds": 750,
   "description": "動画の説明文...",
+  "chapters": [{ "start_time": 0, "end_time": 67, "title": "イントロ" }],
   "view_count": 12345
 }
 ```
+
+`chapters` はチャプター未設定の動画では `[]` です。`start_time` は秒なので、`youtube_get_frame`
+の `timestamp` にそのまま渡せます。
 
 `yt-dlp` が使えない場合や取得に失敗した場合は、`metadata_error` に理由が入ります。
 
