@@ -217,9 +217,20 @@ def _get_metadata(video_id: str, *, full_description: bool = False) -> dict:
         "upload_date": data.get("upload_date", ""),
         "duration_seconds": data.get("duration"),
         "description": description,
+        # Capped like description: chapters are the only header section sized by
+        # the video, and an oversized header would crowd out the transcript.
+        "chapters": (data.get("chapters") or [])[:200],
         "view_count": data.get("view_count"),
         "video_id": video_id,
     }
+
+
+def _format_timestamp(seconds: float) -> str:
+    """Format seconds as [MM:SS], or [HH:MM:SS] past the hour mark."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
 
 
 def _format_line(entry: dict, include_timestamps: bool) -> str:
@@ -227,11 +238,7 @@ def _format_line(entry: dict, include_timestamps: bool) -> str:
     text = entry["text"].strip()
     if not include_timestamps:
         return text
-    h = int(entry["start"] // 3600)
-    m = int((entry["start"] % 3600) // 60)
-    s = int(entry["start"] % 60)
-    ts = f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
-    return f"{ts} {text}"
+    return f"{_format_timestamp(entry['start'])} {text}"
 
 
 def _format_transcript(entries: list[dict], include_timestamps: bool) -> str:
@@ -308,6 +315,20 @@ def _build_output(
             f"- Metadata error: {_markdown_metadata_value(err.get('type', 'unknown'))}"
         )
 
+    chapters_section = ""
+    if metadata.get("chapters"):
+        try:
+            chapter_lines = "\n".join(
+                f"- {_format_timestamp(float(chapter.get('start_time') or 0))} "
+                f"{_markdown_metadata_value(chapter.get('title', ''))}".rstrip()
+                for chapter in metadata["chapters"]
+            )
+            chapters_section = f"\n## Chapters\n\n{chapter_lines}\n"
+        except (AttributeError, TypeError, ValueError):
+            # A chapters payload we cannot read must not sink the transcript,
+            # which by this point is already written to disk.
+            chapters_section = ""
+
     description_section = ""
     if metadata.get("description"):
         escaped = "\n".join(
@@ -320,7 +341,7 @@ def _build_output(
     return f"""# {title}
 
 {metadata_section}
-{description_section}
+{chapters_section}{description_section}
 ## Transcript
 
 {transcript_text}
