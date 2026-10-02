@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -29,6 +30,16 @@ FRAME_FORMAT = (
     "/bv*[height<=720][protocol^=http]"
     "/b[height<=720][protocol^=http]"
 )
+# yt-dlp's default client (ANDROID_VR) returns URLs that 403 any request without
+# a bounded Range header, even seconds later, and ffmpeg sends "bytes=0-".
+# web_embedded and tv_simply URLs take open ranges. Both need yt-dlp-ejs plus a
+# JS runtime (deno) to solve the "n" challenge, or yt-dlp lists no video formats.
+# tv_simply only offers 360p+audio, so it is the fallback for when YouTube breaks
+# web_embedded, as it did ANDROID_VR.
+FRAME_CLIENTS = ["web_embedded", "tv_simply"]
+# A freshly issued web_embedded URL 403s for about a second before googlevideo
+# serves it (measured: ~40% of first requests; all recovered on a 1s retry).
+FRAME_403_ATTEMPTS = 3
 
 mcp = FastMCP("yt-transcript-mcp")
 
@@ -503,7 +514,7 @@ def _save_cache(video_id: str, languages: list[str], transcript_info: dict) -> N
 # ── Frame extraction ──────────────────────────────────────────────────────────
 
 
-def _stream_url(video_id: str) -> str:
+def _stream_url(video_id: str, client: str) -> str:
     """Resolve a direct video stream URL via yt-dlp.
 
     The URL carries an `expire` param (hours), so it cannot be cached.
@@ -511,6 +522,8 @@ def _stream_url(video_id: str) -> str:
     result = subprocess.run(
         [
             "yt-dlp",
+            "--extractor-args",
+            f"youtube:player_client={client}",
             "-f",
             FRAME_FORMAT,
             "-g",
@@ -532,43 +545,69 @@ def _stream_url(video_id: str) -> str:
     return url[0]
 
 
+class _StreamForbidden(RuntimeError):
+    """The stream URL still answered 403 after every retry: the client's fault."""
+
+
 def _extract_frame(stream_url: str, timestamp: str) -> bytes:
-    """Grab one JPEG frame at timestamp. ffmpeg range-reads only what it needs."""
+    """Extract one JPEG frame at timestamp. ffmpeg range-reads only what it needs."""
     import imageio_ffmpeg  # type: ignore[import-untyped]
 
-    result = subprocess.run(
-        [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-nostdin",
-            "-loglevel",
-            "error",
-            # -ss before -i seeks on the input, so ffmpeg fetches only the bytes
-            # around the timestamp instead of streaming the whole video.
-            "-ss",
-            timestamp,
-            "-i",
-            stream_url,
-            "-frames:v",
-            "1",
-            "-q:v",
-            "2",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ],
-        capture_output=True,
-        timeout=120,
-    )
-    if result.returncode != 0 or not result.stdout:
+    cmd = [
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-nostdin",
+        "-loglevel",
+        "error",
+        # -ss before -i seeks on the input, so ffmpeg fetches only the bytes
+        # around the timestamp instead of streaming the whole video.
+        "-ss",
+        timestamp,
+        "-i",
+        stream_url,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "pipe:1",
+    ]
+    for attempt in range(FRAME_403_ATTEMPTS):
+        if attempt:
+            time.sleep(1)
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
         # The signed stream URL is ~1000 chars and ffmpeg echoes it back on
         # failure, so drop it first or it crowds out the actual error.
         stderr = result.stderr.decode("utf-8", "replace").replace(
             stream_url, "<stream>"
         )
-        raise RuntimeError(f"ffmpeg could not extract a frame: {stderr.strip()[-500:]}")
-    return result.stdout
+        message = f"ffmpeg could not extract a frame: {stderr.strip()[-500:]}"
+        # Only the not-yet-live 403 is worth waiting out. Anything else (bad or
+        # past-the-end timestamp) fails the same way on every retry and client.
+        if "403 Forbidden" not in stderr:
+            raise RuntimeError(message)
+    raise _StreamForbidden(message)
+
+
+def _extract_frame_with_fallback(video_id: str, timestamp: str) -> bytes:
+    """Try each client in turn: YouTube's per-client 403s change without notice."""
+    errors = []
+    for client in FRAME_CLIENTS:
+        # A timeout is not caught: it propagates to the tool's own timeout message.
+        try:
+            stream_url = _stream_url(video_id, client)
+        except RuntimeError as e:
+            errors.append(f"[{client}] {e}")
+            continue
+        try:
+            return _extract_frame(stream_url, timestamp)
+        except _StreamForbidden as e:
+            errors.append(f"[{client}] {e}")
+    raise RuntimeError("\n".join(errors))
 
 
 # ── MCP tools ─────────────────────────────────────────────────────────────────
@@ -712,7 +751,7 @@ async def youtube_get_frame(url: str, timestamp: str) -> list | str:
         else:
             # Cache miss: resolving the stream + decoding is the expensive part,
             # so persist the JPEG for reuse as an asset and on repeat requests.
-            data = _extract_frame(_stream_url(video_id), timestamp)
+            data = _extract_frame_with_fallback(video_id, timestamp)
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
