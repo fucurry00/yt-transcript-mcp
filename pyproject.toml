@@ -13,7 +13,13 @@ dependencies = [
     # yt-dlp breaks as YouTube changes, so refresh it with
     # `uv lock --upgrade-package yt-dlp && uv sync` rather than letting uv.lock
     # pin an old version indefinitely.
-    "yt-dlp>=2024.0.0",
+    # Frames need [default] for yt-dlp-ejs, the script that solves YouTube's "n"
+    # challenge, and [deno] for the JS runtime that runs it. Without both, the
+    # web_embedded and tv_simply clients list no video formats. yt-dlp pins ejs
+    # exactly, so it comes via [default] rather than by name; [default] also
+    # brings brotli, certifi, mutagen, pycryptodomex, requests, urllib3 and
+    # websockets. 2026.1.29 is the first release with the [deno] extra.
+    "yt-dlp[default,deno]>=2026.1.29",
     # Ships a static ffmpeg binary, so frame extraction needs no brew/nix install.
     "imageio-ffmpeg>=0.5.0",
 ]

@@ -141,8 +141,14 @@ MCP クライアントで YouTube URL を含む依頼をします。
 その値をそのまま `timestamp` に渡せます。
 
 動画全体はダウンロードしません。`yt-dlp` でストリーム URL を解決し、`ffmpeg` が HTTP range で
-必要な範囲だけ読んで 1 フレームを JPEG で取得します。116 分の動画の任意の地点でも数秒です。
+必要な範囲だけ読んで 1 フレームを JPEG で取得します。1 枚あたり約 7〜12 秒かかり、その大半は
+`yt-dlp` による URL 解決です（11 分の動画で 12 回計測）。
 解像度は 720p 上限です（360p では画面上のコードが判読できず、720p なら本用途には十分なため）。
+
+ストリーム URL は `yt-dlp` の `web_embedded` クライアントで解決します。標準のクライアント
+（ANDROID_VR）の URL は、範囲を区切らない HTTP リクエストを 403 で拒否し、`ffmpeg` がそれを送るためです。
+`web_embedded` で取れなければ `tv_simply` で解決し直します。ただし `tv_simply` は 360p しかありません。
+発行直後の URL は 1 秒ほど 403 を返すことがあるため、403 のときは同じ URL を 1 秒おきに最大 3 回試します。
 
 取得した JPEG は `.transcript_cache/{video_id}_frame_{timestamp}.jpg` に保存し、画像とあわせて
 その絶対パス（`Frame saved to: ...`）を返します。同じ地点の再取得はディスクから返るので、
@@ -207,6 +213,11 @@ CACHE_DIR=/tmp/yt-transcript-cache uv run python server.py
 - それ以外（`yt_dlp_failed` など）で `stderr` が YouTube の仕様変更を示している場合は、`yt-dlp` が古い可能性があります。`uv lock --upgrade-package yt-dlp && uv sync` で更新してください
 - YouTube 側の制限や一時的な取得失敗でも `Unknown` になることがあります
 
+### フレームが取れない
+
+- エラーに `Requested format is not available` とある場合は、`yt-dlp` が JavaScript チャレンジを解けていません。`uv sync` を実行し、`yt-dlp-ejs` と deno が venv に入っているか確認してください
+- `403 Forbidden` が再試行後も続く場合は、YouTube 側の仕様変更の可能性があります。`uv lock --upgrade-package yt-dlp && uv sync` で更新してください
+
 ### 出力が長すぎる
 
 - インラインの出力は約 200,000 文字までに抑えられ、超過分は先頭で打ち切られます（末尾に注記が付きます）
@@ -233,7 +244,7 @@ uv run ruff format . && uv run ruff check --fix . && uv run mypy .
 **すべて uv に一本化し、システムへの別途インストールを前提にしない。** 他者の環境へ移したときに「私の環境では動く」を起こさないための方針です。
 
 - **`youtube-transcript-api`** — 純粋な Python 依存。`uv.lock` で固定。
-- **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`uv lock --upgrade-package yt-dlp && uv sync`）。ここだけは「固定＝安全」が成り立ちません。
+- **`yt-dlp`** — 必須依存。システム版（brew など）があってもそちらは使いません。ただし YouTube の変更に追従し続けることで動くツールなので、**固定しっぱなしにしないこと**が重要です（`uv lock --upgrade-package yt-dlp && uv sync`）。ここだけは「固定＝安全」が成り立ちません。`yt-dlp[default,deno]` と指定しているため、JavaScript チャレンジを解くスクリプト `yt-dlp-ejs` と、それを実行する deno（Deno 公式が PyPI で配布するバイナリ）も入ります。どちらもフレーム取得に必要です。`yt-dlp` は `yt-dlp-ejs` の版を完全一致で指定しているので、名前で直接指定せず `[default]` 経由で入れています。`[default]` からは brotli、certifi、mutagen、pycryptodomex、requests、urllib3、websockets も入ります。
 - **`imageio-ffmpeg`** — `youtube_get_frame` のフレーム抽出に使用。静的バイナリを同梱しており、brew なしで uv 管理下に置けます。ffmpeg 単体のみで `ffprobe` は付きませんが、フレーム抽出は ffmpeg だけで完結するため問題ありません。
 
 ### ツール description は短く保つ

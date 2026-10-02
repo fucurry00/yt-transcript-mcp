@@ -564,6 +564,118 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("boom", result)
 
 
+class ExtractFrameWithFallbackTests(unittest.TestCase):
+    FORBIDDEN = server._StreamForbidden("ffmpeg could not extract a frame: 403")
+
+    def test_falls_through_to_next_client_after_a_persistent_403(self):
+        with (
+            patch.object(server, "FRAME_CLIENTS", ["a", "b"]),
+            patch.object(server, "_stream_url", side_effect=lambda vid, c: f"url-{c}"),
+            patch.object(
+                server,
+                "_extract_frame",
+                side_effect=[self.FORBIDDEN, b"jpeg"],
+            ) as extract,
+        ):
+            self.assertEqual(server._extract_frame_with_fallback("vid", "10"), b"jpeg")
+
+        self.assertEqual(
+            [c.args[0] for c in extract.call_args_list], ["url-a", "url-b"]
+        )
+
+    def test_falls_through_when_a_client_cannot_resolve(self):
+        with (
+            patch.object(server, "FRAME_CLIENTS", ["a", "b"]),
+            patch.object(
+                server,
+                "_stream_url",
+                side_effect=[RuntimeError("format is not available"), "url-b"],
+            ),
+            patch.object(server, "_extract_frame", return_value=b"jpeg") as extract,
+        ):
+            self.assertEqual(server._extract_frame_with_fallback("vid", "10"), b"jpeg")
+
+        extract.assert_called_once_with("url-b", "10")
+
+    def test_does_not_try_other_clients_on_a_timestamp_error(self):
+        # A past-the-end timestamp fails on every client, so another yt-dlp
+        # resolve would only add seconds and repeat the same error.
+        bad = RuntimeError("ffmpeg could not extract a frame: Invalid argument")
+        with (
+            patch.object(server, "FRAME_CLIENTS", ["a", "b"]),
+            patch.object(server, "_stream_url", return_value="u") as stream_url,
+            patch.object(server, "_extract_frame", side_effect=bad),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Invalid argument"):
+                server._extract_frame_with_fallback("vid", "10")
+
+        stream_url.assert_called_once()
+
+    def test_reports_every_client_error_when_all_fail(self):
+        with (
+            patch.object(server, "FRAME_CLIENTS", ["a", "b"]),
+            patch.object(server, "_stream_url", return_value="u"),
+            patch.object(server, "_extract_frame", side_effect=self.FORBIDDEN),
+        ):
+            with self.assertRaisesRegex(RuntimeError, r"\[a\].*\n\[b\]"):
+                server._extract_frame_with_fallback("vid", "10")
+
+    def test_lets_a_yt_dlp_timeout_reach_the_tool(self):
+        # The tool turns TimeoutExpired into its own "Timed out" message.
+        timeout = subprocess.TimeoutExpired("yt-dlp", 30)
+        with (
+            patch.object(server, "FRAME_CLIENTS", ["a", "b"]),
+            patch.object(server, "_stream_url", side_effect=timeout) as stream_url,
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                server._extract_frame_with_fallback("vid", "10")
+
+        stream_url.assert_called_once()
+
+
+class ExtractFrameTests(unittest.TestCase):
+    FORBIDDEN = subprocess.CompletedProcess(
+        [], 8, b"", b"Server returned 403 Forbidden (access denied)"
+    )
+
+    def test_retries_the_same_url_after_a_403(self):
+        ok = subprocess.CompletedProcess([], 0, b"jpeg", b"")
+        with (
+            patch.object(
+                server.subprocess, "run", side_effect=[self.FORBIDDEN, ok]
+            ) as run,
+            patch.object(server.time, "sleep") as sleep,
+        ):
+            self.assertEqual(server._extract_frame("https://example/v", "10"), b"jpeg")
+
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("https://example/v", run.call_args_list[1].args[0])
+        sleep.assert_called_once_with(1)
+
+    def test_gives_up_on_a_persistent_403(self):
+        with (
+            patch.object(server.subprocess, "run", return_value=self.FORBIDDEN) as run,
+            patch.object(server.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(server._StreamForbidden, "403"):
+                server._extract_frame("https://example/v", "10")
+
+        self.assertEqual(run.call_count, 3)
+
+    def test_does_not_retry_other_errors(self):
+        bad = subprocess.CompletedProcess([], 1, b"", b"Invalid duration for option ss")
+        with (
+            patch.object(server.subprocess, "run", return_value=bad) as run,
+            patch.object(server.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Invalid duration") as ctx:
+                server._extract_frame("https://example/v", "10")
+
+        self.assertNotIsInstance(ctx.exception, server._StreamForbidden)
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()
+
+
 class TranscriptFileTests(unittest.TestCase):
     def test_write_transcript_md_writes_timestamped_lines(self):
         entries = [
